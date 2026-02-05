@@ -35,6 +35,25 @@ if [[ ! -f "$BROWSER_DIR/docker-compose.yml" ]]; then
     git -C "$PROJECT_DIR" submodule update --init --recursive
 fi
 
+# Ensure tmp directories exist with correct permissions
+# Docker containers create directories as root, but MCP server runs as current user
+ensure_tmp_permissions() {
+    local tmp_dir="$BROWSER_DIR/tmp"
+    local dirs=("screenshots" "omniparser" "logs" "sessions" "videos" "x11_screenshots")
+
+    mkdir -p "$tmp_dir"
+    for d in "${dirs[@]}"; do
+        mkdir -p "$tmp_dir/$d"
+    done
+
+    # Fix ownership if directories were created by Docker as root
+    if [[ -d "$tmp_dir" ]] && [[ "$(stat -c '%U' "$tmp_dir" 2>/dev/null)" == "root" ]]; then
+        echo "[INFO] Fixing tmp directory permissions..."
+        sudo chown -R "$(id -u):$(id -g)" "$tmp_dir"
+    fi
+}
+ensure_tmp_permissions
+
 # Docker image names
 LLAMA_IMAGE="llama-server-cuda:latest"
 
