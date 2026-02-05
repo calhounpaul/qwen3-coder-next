@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Unified local LLM inference environment with browser automation and MCP integration.
+Unified local LLM inference environment with browser automation MCP integration.
 
 See [README.md](./README.md) for end-user documentation.
 
@@ -12,6 +12,7 @@ See [README.md](./README.md) for end-user documentation.
 
 - **NEVER use `huggingface-cli`** - Always use `hf` command instead for all HuggingFace operations (download, upload, etc.)
 - **Image Analysis**: Do not use the Read tool for images (`.png`, `.jpg`, etc.). Use `vlm_chat` for image understanding instead.
+- **ML Service Management**: ML services (OmniParser, GUI-Actor, VLM) use **MLServiceManager** for on-demand startup with mutual exclusion - only one ML service runs at a time (see `mcp-browser-co-gnome/src/novnc_automation/ml_services.py`)
 
 ## Quick Start
 
@@ -76,9 +77,10 @@ See [README.md](./README.md) for end-user documentation.
 ML services (OmniParser, GUI-Actor, VLM) use the **MLServiceManager** for automatic lifecycle management:
 
 - **On-demand startup**: Services start when MCP tools are called
-- **Auto-stop**: Services stop after 5 minutes of idle time (configurable via `ML_IDLE_TIMEOUT`)
-- **Mutual exclusion**: Only one ML service runs at a time (MLServiceManager stops others first)
-- Environment variables: `ML_IDLE_TIMEOUT` (default: 300), `ML_ALWAYS_ON` (services to never auto-stop)
+- **Auto-stop**: Services stop after 5 minutes idle (configurable via `ML_IDLE_TIMEOUT` env var)
+- **Mutual exclusion**: Only one ML service runs at a time (stops others first to avoid GPU OOM)
+- Environment variables: `ML_IDLE_TIMEOUT` (default: 300s), `ML_ALWAYS_ON` (comma-separated service names to never stop)
+- Implementation: `mcp-browser-co-gnome/src/novnc_automation/ml_services.py`
 
 ## MCP Browser Tools
 

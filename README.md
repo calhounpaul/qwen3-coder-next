@@ -8,8 +8,14 @@ Unified local LLM inference environment with browser automation MCP integration.
 # Start everything and launch Claude Code
 ./local-cc.sh
 
+# With VLM for image analysis
+./local-cc.sh --vlm
+
 # With ML services (OmniParser, GUI-Actor for visual automation)
 ./local-cc.sh --ml
+
+# With all services
+./local-cc.sh --vlm --ml
 
 # Stop all services
 ./local-cc.sh --stop
@@ -28,7 +34,7 @@ After `--install`, you can run `local-cc` from any directory.
 | Service | Port | Description |
 |---------|------|-------------|
 | Code LLM | 8003 | Qwen3-Coder-Next (65k context, dual GPU) |
-| VLM | 8004 | UI-TARS-2B (vision-language model) |
+| VLM | 8004 | Qwen3-VL-4B (vision-language model) |
 | noVNC | 6080 | Browser visualization (password: `secret`) |
 | OmniParser | 8010 | UI element detection (with `--ml`) |
 | GUI-Actor | 8001 | Natural language clicks (with `--ml`) |
@@ -43,44 +49,54 @@ After `--install`, you can run `local-cc` from any directory.
 
 Models are automatically downloaded on first run:
 
-- **Code LLM**: `unsloth/Qwen3-Coder-Next-GGUF` (~33GB)
-- **VLM**: `unsloth/Qwen3-VL-4B-Instruct-GGUF` (~3GB)
+- **Code LLM**: `unsloth/Qwen3-Coder-Next-GGUF` (auto-selected based on VRAM)
+  - ≥48GB: Q8_0 | ≥32GB: IQ4_XS | ≥24GB: IQ3_XXS | <24GB: IQ2_XXS
+- **VLM**: `unsloth/Qwen3-VL-4B-Instruct-GGUF` (~3GB, auto-downloads to `mcp-browser-co-gnome/tmp/vlm-models/`)
 
 ## MCP Browser Tools
 
 Once running, Claude has access to browser automation:
 
 ```
+# Core tools (always available)
 docker_start, docker_stop, docker_status
 browser_start, browser_goto, browser_click, browser_fill, browser_screenshot
-omniparser_analyze, omniparser_click (with --ml)
-natural_language_click (with --ml)
+
+# VLM tool (with --vlm flag)
+vlm_chat - Chat with vision model, supports images
+
+# ML tools (with --ml flag)
+omniparser_analyze, omniparser_click, omniparser_list_elements
+natural_language_click
 ```
 
 View the browser at http://localhost:6080 (password: `secret`)
 
+## Visual Element Clicking Workflow
+
+For clicking elements based on visual properties:
+
+1. `browser_start` → `browser_screenshot` → `omniparser_analyze`
+2. View screenshot to identify target element
+3. Match visual target to element ID from OmniParser
+4. `omniparser_click(element_id=N)`
+
 ## Requirements
 
 - Docker with NVIDIA GPU support
-- `huggingface-cli` (`pip install huggingface_hub`)
+- `hf` CLI (`pip install huggingface_hub`)
 - Claude Code CLI
 
-## Manual Setup (if needed)
+## ML Service Management
 
-### Build llama.cpp Docker Image
+ML services (OmniParser, GUI-Actor, VLM) use **on-demand startup** with mutual exclusion:
 
-```bash
-cd llama.cpp
-docker build -t llama-server-cuda:latest -f .devops/cuda.Dockerfile .
-```
+- Services start automatically when their MCP tools are called
+- Only one ML service runs at a time (shared GPU 1 memory)
+- Auto-stop after 5 minutes idle (configurable via `ML_IDLE_TIMEOUT`)
+- Environment variables: `ML_IDLE_TIMEOUT`, `ML_ALWAYS_ON` (comma-separated service names)
 
-### Build Browser Automation
-
-```bash
-cd mcp-browser-co-gnome
-docker compose build
-pip install -e .
-```
+See `mcp-browser-co-gnome/CLAUDE.md` for more details on ML service management.
 
 ## License
 
