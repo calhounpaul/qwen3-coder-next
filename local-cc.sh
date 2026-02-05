@@ -29,6 +29,12 @@ PROJECT_DIR="$SCRIPT_DIR"
 MODEL_DIR="$PROJECT_DIR/models"
 BROWSER_DIR="$PROJECT_DIR/mcp-browser-co-gnome"
 
+# Ensure submodule is initialized
+if [[ ! -f "$BROWSER_DIR/docker-compose.yml" ]]; then
+    echo "[INFO] Initializing mcp-browser-co-gnome submodule..."
+    git -C "$PROJECT_DIR" submodule update --init --recursive
+fi
+
 # Docker image names
 LLAMA_IMAGE="llama-server-cuda:latest"
 
