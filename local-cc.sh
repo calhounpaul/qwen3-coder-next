@@ -304,6 +304,7 @@ start_llm_servers() {
             --tensor-split 1.0,0.5 \
             -fit off \
             --ctx-size 98304 \
+            --context-shift \
             --port 8080 \
             --jinja \
             --cache-type-k q8_0 --cache-type-v q8_0 \
@@ -578,7 +579,6 @@ launch_claude() {
 
     export ANTHROPIC_BASE_URL="http://localhost:$CODE_PORT"
     export ANTHROPIC_API_KEY='sk-no-key-required'
-    export CONTEXT_COMPACTION_THRESHOLD=60000
 
     echo ""
     echo "=========================================="
