@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "novnc-automation": {
+      "command": "novnc-mcp",
+      "env": {
+        "HEADLESS": "false",
+        "STEALTH_MODE": "true",
+        "RECORD_TRACE": "true",
+        "RECORD_HAR": "true"
+      }
+    }
+  }
+}

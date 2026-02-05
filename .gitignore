@@ -1,0 +1,62 @@
+# User-specific scripts (legacy)
+run-qwen3-server.sh
+run-cc-qwen.sh
+run-docker-servers.sh
+
+# Claude local settings (may contain user paths)
+.claude/
+
+# Secrets and credentials
+*.secret
+*.secrets
+*secret*
+*credential*
+*.key
+*.pem
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+
+# API keys
+*api_key*
+*apikey*
+*token*
+
+# Models (large files)
+*.gguf
+*.bin
+*.safetensors
+models/
+
+# Build artifacts
+build/
+tmp/
+*.o
+*.a
+*.so
+*.dylib
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/

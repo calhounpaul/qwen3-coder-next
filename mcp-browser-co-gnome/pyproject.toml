@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "novnc-automation"
+version = "0.1.0"
+description = "Browser automation suite with noVNC visualization and Docker support"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Author", email = "author@example.com" }
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "playwright>=1.40.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    "aiofiles>=23.0.0",
+    "python-dotenv>=1.0.0",
+    "mcp>=1.0.0",
+    "pillow>=10.0.0",
+    "httpx>=0.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.1.0",
+]
+# For local browser mode (not Docker)
+local = [
+    "playwright-stealth>=1.0.6",
+]
+
+[project.scripts]
+novnc-mcp = "novnc_automation.mcp_server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/novnc_automation"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

@@ -1,0 +1,28 @@
+# Browser Automation Configuration
+
+browser:
+  headless: false
+  stealth_mode: true
+  viewport_width: 1920
+  viewport_height: 1080
+  user_agent: null  # Use default
+  extra_args: []
+
+recording:
+  record_video: true
+  record_trace: true
+  record_har: true
+  record_actions: true
+  tmp_dir: tmp
+  sessions_dir: tmp/sessions
+
+tunnel:
+  enable_tunnel: false
+  tunnel_port: 6080
+
+docker:
+  vnc_password: secret
+  resolution: 1920x1080x24
+  novnc_port: 6080
+  vnc_port: 5900
+  cdp_port: 9222
