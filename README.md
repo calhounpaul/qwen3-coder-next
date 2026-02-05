@@ -33,7 +33,7 @@ After `--install`, you can run `local-cc` from any project directory. The tools 
 
 | Service | Port | Description |
 |---------|------|-------------|
-| Code LLM | 8003 | Qwen3-Coder-Next (65k context, dual GPU) |
+| Code LLM | 8003 | Qwen3-Coder-Next (120k context, dual GPU) |
 | VLM | 8004 | Qwen3-VL-4B (vision-language model) |
 | noVNC | 6080 | Browser visualization (password: `secret`) |
 | OmniParser | 8010 | UI element detection (with `--ml`) |

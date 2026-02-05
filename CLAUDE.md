@@ -21,7 +21,7 @@ See [README.md](./README.md) for end-user documentation.
 
 | Service | Port | Description |
 |---------|------|-------------|
-| Code LLM | 8003 | Qwen3-Coder-Next (65k ctx, dual-GPU) |
+| Code LLM | 8003 | Qwen3-Coder-Next (120k ctx, dual-GPU) |
 | noVNC | 6080 | Browser visualization (password: `secret`) |
 | CDP | 9222 | Chrome DevTools Protocol |
 | VLM | 8004 | Qwen3-VL-4B (vision-language model) |
@@ -90,7 +90,7 @@ Environment variables:
 
 | Service | Port | Description | Flag |
 |---------|------|-------------|------|
-| Code LLM | 8003 | Qwen3-Coder-Next (65k ctx, VRAM-auto quant) | default |
+| Code LLM | 8003 | Qwen3-Coder-Next (120k ctx, VRAM-auto quant) | default |
 | noVNC | 6080 | Browser visualization (password: `secret`) | default |
 | CDP | 9222 | Chrome DevTools Protocol | default |
 | VLM | 8004 | Qwen3-VL-4B (vision-language model) | `--vlm` |
