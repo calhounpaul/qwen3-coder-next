@@ -62,8 +62,6 @@ Environment variables:
 
 ## Quick Start
 
-## Quick Start
-
 ```bash
 ./local-cc.sh              # Start Code LLM + browser and launch Claude Code
 ./local-cc.sh --vlm        # Include VLM for image analysis (vlm_chat tool)

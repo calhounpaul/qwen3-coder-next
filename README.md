@@ -27,7 +27,7 @@ Unified local LLM inference environment with browser automation MCP integration.
 ./local-cc.sh --install
 ```
 
-After `--install`, you can run `local-cc` from any directory.
+After `--install`, you can run `local-cc` from any project directory. The tools (models, browser automation) are found automatically, while Claude Code operates in your current directory.
 
 ## What Gets Started
 
