@@ -303,7 +303,7 @@ start_llm_servers() {
             --split-mode layer \
             --tensor-split 1.0,0.5 \
             -fit off \
-            --ctx-size 200000 \
+            --ctx-size 120000 \
             --context-shift \
             --port 8080 \
             --jinja \
