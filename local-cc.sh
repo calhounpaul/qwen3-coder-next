@@ -177,8 +177,7 @@ ensure_models() {
     if [[ ! -f "$MODEL_DIR/$CODE_MODEL_DIR/$CODE_MODEL_FILE" ]]; then
         log "Downloading Code LLM: $CODE_MODEL_FILE..."
         hf download "$CODE_MODEL_REPO" "$CODE_MODEL_FILE" \
-            --local-dir "$MODEL_DIR/$CODE_MODEL_DIR" \
-            --local-dir-use-symlinks False
+            --local-dir "$MODEL_DIR/$CODE_MODEL_DIR"
     else
         log "Code LLM already present: $CODE_MODEL_FILE"
     fi
