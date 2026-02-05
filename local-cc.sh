@@ -29,10 +29,13 @@ PROJECT_DIR="$SCRIPT_DIR"
 MODEL_DIR="$PROJECT_DIR/models"
 BROWSER_DIR="$PROJECT_DIR/mcp-browser-co-gnome"
 
-# Ensure submodule is initialized
+# Ensure submodule is initialized and up to date
 if [[ ! -f "$BROWSER_DIR/docker-compose.yml" ]]; then
     echo "[INFO] Initializing mcp-browser-co-gnome submodule..."
     git -C "$PROJECT_DIR" submodule update --init --recursive
+else
+    # Update submodule if it's behind the committed version
+    git -C "$PROJECT_DIR" submodule update --init --recursive --quiet
 fi
 
 # Ensure tmp directories exist with correct permissions
