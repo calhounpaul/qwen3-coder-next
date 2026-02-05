@@ -20,24 +20,22 @@ set -e
 #   ./local-cc.sh --install    # Install as 'local-cc' command system-wide
 # =============================================================================
 
-# Use environment variable if set (for installed wrapper), otherwise use current directory
-if [[ -n "$LOCAL_CC_PROJECT_DIR" ]]; then
-    PROJECT_DIR="$LOCAL_CC_PROJECT_DIR"
-else
-    PROJECT_DIR="$PWD"
-fi
+# TOOL_DIR: where local-cc.sh and its resources live (models, mcp-browser-co-gnome)
+# PROJECT_DIR: where to launch Claude Code (current working directory)
+TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${LOCAL_CC_PROJECT_DIR:-$PWD}"
 
-# Configuration
-MODEL_DIR="$PROJECT_DIR/models"
-BROWSER_DIR="$PROJECT_DIR/mcp-browser-co-gnome"
+# Configuration - tools are in TOOL_DIR, not PROJECT_DIR
+MODEL_DIR="$TOOL_DIR/models"
+BROWSER_DIR="$TOOL_DIR/mcp-browser-co-gnome"
 
 # Ensure submodule is initialized and up to date
 if [[ ! -f "$BROWSER_DIR/docker-compose.yml" ]]; then
     echo "[INFO] Initializing mcp-browser-co-gnome submodule..."
-    git -C "$PROJECT_DIR" submodule update --init --recursive
+    git -C "$TOOL_DIR" submodule update --init --recursive
 else
     # Update submodule if it's behind the committed version
-    git -C "$PROJECT_DIR" submodule update --init --recursive --quiet
+    git -C "$TOOL_DIR" submodule update --init --recursive --quiet
 fi
 
 # Ensure tmp directories exist with correct permissions
@@ -228,7 +226,7 @@ ensure_llama_image() {
     log "Building LLaMA server image (this may take a while)..."
     log "Cloning and compiling llama.cpp with CUDA support..."
 
-    docker build -t "$LLAMA_IMAGE" -f "$PROJECT_DIR/Dockerfile.llama-server" "$PROJECT_DIR"
+    docker build -t "$LLAMA_IMAGE" -f "$TOOL_DIR/Dockerfile.llama-server" "$TOOL_DIR"
 
     log "LLaMA server image built successfully"
 }
