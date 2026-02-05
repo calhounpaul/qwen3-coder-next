@@ -20,10 +20,12 @@ set -e
 #   ./local-cc.sh --install    # Install as 'local-cc' command system-wide
 # =============================================================================
 
-# Resolve script directory (works even when called via symlink)
-SCRIPT_PATH="$(readlink -f "$0")"
-SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
-PROJECT_DIR="$SCRIPT_DIR"
+# Use environment variable if set (for installed wrapper), otherwise use current directory
+if [[ -n "$LOCAL_CC_PROJECT_DIR" ]]; then
+    PROJECT_DIR="$LOCAL_CC_PROJECT_DIR"
+else
+    PROJECT_DIR="$PWD"
+fi
 
 # Configuration
 MODEL_DIR="$PROJECT_DIR/models"
@@ -497,18 +499,28 @@ install_command() {
     header "Installing local-cc Command"
 
     local install_path="/usr/local/bin/local-cc"
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-    if [[ -f "$install_path" ]]; then
+    if [[ -e "$install_path" ]]; then
         log "Updating existing installation..."
     else
         log "Installing local-cc to $install_path..."
     fi
 
-    # Create symlink
-    sudo ln -sf "$SCRIPT_PATH" "$install_path"
+    # Remove any existing file/symlink first (critical - symlinks follow through on write!)
+    sudo rm -f "$install_path"
+
+    # Create wrapper script that preserves current working directory
+    sudo tee "$install_path" > /dev/null << EOF
+#!/bin/bash
+# Wrapper for local-cc - preserves current working directory
+export LOCAL_CC_PROJECT_DIR="\$PWD"
+exec "$script_dir/local-cc.sh" "\$@"
+EOF
+    sudo chmod +x "$install_path"
 
     if [[ -x "$install_path" ]]; then
-        log "Successfully installed! You can now run 'local-cc' from anywhere."
+        log "Successfully installed! You can now run 'local-cc' from any project directory."
         echo ""
         echo "Usage:"
         echo "  local-cc           # Start services and launch Claude Code"
