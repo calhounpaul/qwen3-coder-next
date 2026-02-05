@@ -1,0 +1,3 @@
+[submodule "mcp-browser-co-gnome"]
+	path = mcp-browser-co-gnome
+	url = https://github.com/calhounpaul/mcp-browser-co-gnome
