@@ -150,6 +150,7 @@ wait_for_health() {
     local url="$1"
     local name="$2"
     local max_wait="${3:-300}"  # Default 5 minutes for large models
+    local check_json="${4:-true}"  # Whether to check for JSON status
 
     log "Waiting for $name to be ready..."
     local elapsed=0
@@ -159,9 +160,12 @@ wait_for_health() {
         local http_code=$(echo "$response" | tail -1)
         local body=$(echo "$response" | head -n -1)
 
-        if [[ "$http_code" == "200" ]] && echo "$body" | grep -q '"status".*"ok"'; then
-            log "$name is ready (took ${elapsed}s)"
-            return 0
+        if [[ "$http_code" == "200" ]]; then
+            # For JSON APIs, check for status field; for web UIs, just check HTTP 200
+            if [[ "$check_json" == "false" ]] || echo "$body" | grep -q '"status".*"ok"'; then
+                log "$name is ready (took ${elapsed}s)"
+                return 0
+            fi
         fi
 
         # Show progress every 30 seconds
@@ -330,7 +334,8 @@ start_browser_services() {
     else
         log "Starting browser and video containers..."
         docker compose up -d browser video
-        wait_for_health "http://localhost:$NOVNC_PORT" "Browser (noVNC)" 60 || true
+        # noVNC returns HTML, not JSON - use check_json=false
+        wait_for_health "http://localhost:$NOVNC_PORT" "Browser (noVNC)" 60 false || true
     fi
 
     # Start VLM service if requested
