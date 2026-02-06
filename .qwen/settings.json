@@ -1,0 +1,37 @@
+{
+  "model": {
+    "name": "unsloth/Qwen3-Coder-Next",
+    "maxSessionTurns": -1,
+    "chatCompression": {
+      "contextPercentageThreshold": 0.85
+    },
+    "generationConfig": {
+      "timeout": 120000,
+      "contextWindowSize": 120000,
+      "samplingParams": {
+        "temperature": 1,
+        "top_p": 0.95,
+        "top_k": 40
+      }
+    }
+  },
+  "context": {
+    "fileName": "QWEN.md",
+    "loadFromIncludeDirectories": false,
+    "fileFiltering": {
+      "respectGitIgnore": true,
+      "respectQwenIgnore": true,
+      "enableRecursiveFileSearch": true
+    }
+  },
+  "tools": {
+    "approvalMode": "default"
+  },
+  "$version": 2,
+  "mcpServers": {
+    "browser-automation": {
+      "command": "novnc-mcp",
+      "args": []
+    }
+  }
+}

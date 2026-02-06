@@ -2,17 +2,17 @@
 set -e
 
 # =============================================================================
-# local-cc.sh - Unified Local Claude Code Environment
+# local-cc.sh - Unified Local Qwen Code Environment
 # =============================================================================
 # Spins up:
 #   - Code LLM (Qwen3-Coder-Next) on port 8003 (VRAM-auto quant)
 #   - Browser automation containers (noVNC, video)
 #   - VLM (Qwen3-VL-4B) on port 8004 with --vlm flag
 #   - ML services (OmniParser, GUI-Actor) with --ml flag
-#   - MCP browser server for Claude
+#   - MCP browser server for Qwen Code
 #
 # Usage:
-#   ./local-cc.sh              # Start services and launch Claude Code
+#   ./local-cc.sh              # Start services and launch Qwen Code
 #   ./local-cc.sh --vlm        # Include VLM for image analysis
 #   ./local-cc.sh --ml         # Include ML services (OmniParser, GUI-Actor)
 #   ./local-cc.sh --stop       # Stop all services
@@ -21,7 +21,7 @@ set -e
 # =============================================================================
 
 # TOOL_DIR: where local-cc.sh and its resources live (models, mcp-browser-co-gnome)
-# PROJECT_DIR: where to launch Claude Code (current working directory)
+# PROJECT_DIR: where to launch Qwen Code (current working directory)
 TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${LOCAL_CC_PROJECT_DIR:-$PWD}"
 
@@ -97,6 +97,94 @@ info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 header() { echo -e "\n${CYAN}=== $1 ===${NC}\n"; }
 
 # =============================================================================
+# Remote Server Configuration
+# =============================================================================
+
+# Remote endpoint URLs (empty = use local)
+REMOTE_CODE_URL=""
+REMOTE_VLM_URL=""
+REMOTE_NOVNC_URL=""
+REMOTE_OMNIPARSER_URL=""
+REMOTE_GUI_ACTOR_URL=""
+
+# Flag to skip security prompts (--insecure-ok)
+INSECURE_OK=false
+
+# Check if a URL is potentially insecure (http:// to non-IP domain)
+check_url_security() {
+    local url="$1"
+    local service_name="$2"
+
+    # Empty URL is fine (local)
+    [[ -z "$url" ]] && return 0
+
+    # Extract protocol and host
+    local protocol="${url%%://*}"
+    local host_port="${url#*://}"
+    local host="${host_port%%:*}"
+    local host="${host%%/*}"
+
+    # Check if it's HTTP (not HTTPS)
+    if [[ "$protocol" == "http" ]]; then
+        # Check if host is NOT an IP address (v4 or v6)
+        if ! [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && \
+           ! [[ "$host" =~ ^localhost$ ]] && \
+           ! [[ "$host" =~ ^\[.*\]$ ]] && \
+           ! [[ "$host" =~ ^::1$ ]]; then
+            # It's a domain name with HTTP - warn user
+            if ! $INSECURE_OK; then
+                echo ""
+                echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
+                echo -e "${RED}║                    ⚠️  SECURITY WARNING ⚠️                       ║${NC}"
+                echo -e "${RED}╠════════════════════════════════════════════════════════════════╣${NC}"
+                echo -e "${RED}║${NC} Service: ${YELLOW}${service_name}${NC}"
+                echo -e "${RED}║${NC} URL:     ${YELLOW}${url}${NC}"
+                echo -e "${RED}║${NC}"
+                echo -e "${RED}║${NC} You are connecting to a ${YELLOW}non-local domain${NC} using ${YELLOW}HTTP${NC}"
+                echo -e "${RED}║${NC} (unencrypted). Your API requests and responses will be"
+                echo -e "${RED}║${NC} sent in ${YELLOW}plain text${NC} over the internet."
+                echo -e "${RED}║${NC}"
+                echo -e "${RED}║${NC} This could expose:"
+                echo -e "${RED}║${NC}   • Your prompts and code"
+                echo -e "${RED}║${NC}   • API keys or tokens"
+                echo -e "${RED}║${NC}   • Model responses"
+                echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
+                echo ""
+                echo -n "Do you want to continue with this insecure connection? [y/N] "
+                read -r response
+                if [[ ! "$response" =~ ^[Yy]$ ]]; then
+                    error "Aborted. Use HTTPS or add --insecure-ok to skip this warning."
+                fi
+                echo ""
+            else
+                warn "Insecure HTTP connection to $service_name ($host) - proceeding due to --insecure-ok"
+            fi
+        fi
+    fi
+
+    return 0
+}
+
+# Parse a remote URL argument (format: URL or host:port)
+parse_remote_url() {
+    local input="$1"
+    local default_port="$2"
+
+    # If it already has a protocol, return as-is
+    if [[ "$input" =~ ^https?:// ]]; then
+        echo "$input"
+        return
+    fi
+
+    # If it's just host:port or host, add http://
+    if [[ "$input" =~ : ]]; then
+        echo "http://${input}"
+    else
+        echo "http://${input}:${default_port}"
+    fi
+}
+
+# =============================================================================
 # VRAM Detection and Model Selection
 # =============================================================================
 
@@ -114,9 +202,10 @@ detect_vram() {
 select_model_quant() {
     local vram_gb="$1"
     # Select quantization based on available VRAM
-    # Reserve ~10% for other processes
-    if [[ $vram_gb -ge 48 ]]; then
-        echo "Qwen3-Coder-Next-Q8_0.gguf"
+    # Reserve ~10GB for KV cache and other processes
+    # Note: A6000 reports as 47GB due to rounding
+    if [[ $vram_gb -ge 45 ]]; then
+        echo "Qwen3-Coder-Next-Q3_K_S.gguf"  # 34.6GB - fits in 48GB with room for KV cache
     elif [[ $vram_gb -ge 32 ]]; then
         echo "Qwen3-Coder-Next-IQ4_XS.gguf"
     elif [[ $vram_gb -ge 24 ]]; then
@@ -304,9 +393,6 @@ start_llm_servers() {
             --model "/models/$CODE_MODEL_DIR/$CODE_MODEL_FILE" \
             --alias "unsloth/Qwen3-Coder-Next" \
             --n-gpu-layers 999 \
-            --split-mode layer \
-            --tensor-split 1.0,0.5 \
-            -fit off \
             --ctx-size 120000 \
             --context-shift \
             --port 8080 \
@@ -317,7 +403,7 @@ start_llm_servers() {
             --batch-size 4096 --ubatch-size 1024
     fi
 
-    # Wait for server to be ready (required before launching Claude)
+    # Wait for server to be ready (required before launching Qwen Code)
     wait_for_health "http://localhost:$CODE_PORT/health" "Code LLM" 300 || error "Code LLM failed to start within 5 minutes. Check logs: docker logs $CODE_CONTAINER"
 }
 
@@ -392,30 +478,55 @@ ensure_mcp_server() {
     cd "$PROJECT_DIR"
 }
 
-configure_claude_mcp() {
-    header "Configuring Claude MCP"
+configure_qwen_mcp() {
+    header "Configuring Qwen Code MCP"
 
     local mcp_command="novnc-mcp"
     local mcp_name="browser-automation"
 
-    # Check if claude CLI is available
-    if ! command -v claude &>/dev/null; then
-        warn "Claude CLI not found. Skipping MCP configuration."
-        warn "Install Claude Code and run: claude mcp add-json $mcp_name '{\"type\":\"stdio\",\"command\":\"$mcp_command\"}'"
+    # Check if qwen CLI is available
+    if ! command -v qwen &>/dev/null; then
+        warn "Qwen Code CLI not found. Skipping MCP configuration."
+        warn "Install Qwen Code and run: qwen mcp add --transport stdio $mcp_name $mcp_command"
         return 0
     fi
 
     # Check if MCP server is already configured
-    if claude mcp list 2>/dev/null | grep -q "$mcp_name"; then
+    if qwen mcp list 2>/dev/null | grep -q "$mcp_name"; then
         log "MCP server '$mcp_name' already configured"
     else
-        log "Adding MCP server to Claude..."
-        claude mcp add-json "$mcp_name" "{\"type\":\"stdio\",\"command\":\"$mcp_command\"}" || {
+        log "Adding MCP server to Qwen Code..."
+        qwen mcp add --transport stdio "$mcp_name" "$mcp_command" || {
             warn "Failed to add MCP server automatically."
-            warn "Add manually: claude mcp add-json $mcp_name '{\"type\":\"stdio\",\"command\":\"$mcp_command\"}'"
+            warn "Add manually: qwen mcp add --transport stdio $mcp_name $mcp_command"
         }
     fi
 }
+
+# configure_claude_mcp() {
+#     header "Configuring Claude MCP"
+#
+#     local mcp_command="novnc-mcp"
+#     local mcp_name="browser-automation"
+#
+#     # Check if claude CLI is available
+#     if ! command -v claude &>/dev/null; then
+#         warn "Claude CLI not found. Skipping MCP configuration."
+#         warn "Install Claude Code and run: claude mcp add-json $mcp_name '{\"type\":\"stdio\",\"command\":\"$mcp_command\"}'"
+#         return 0
+#     fi
+#
+#     # Check if MCP server is already configured
+#     if claude mcp list 2>/dev/null | grep -q "$mcp_name"; then
+#         log "MCP server '$mcp_name' already configured"
+#     else
+#         log "Adding MCP server to Claude..."
+#         claude mcp add-json "$mcp_name" "{\"type\":\"stdio\",\"command\":\"$mcp_command\"}" || {
+#             warn "Failed to add MCP server automatically."
+#             warn "Add manually: claude mcp add-json $mcp_name '{\"type\":\"stdio\",\"command\":\"$mcp_command\"}'"
+#         }
+#     fi
+# }
 
 # =============================================================================
 # Stop Functions
@@ -423,6 +534,9 @@ configure_claude_mcp() {
 
 stop_all() {
     header "Stopping All Services"
+
+    # Stop any running tunnels
+    stop_tunnels
 
     # Stop Code LLM container
     log "Stopping Code LLM..."
@@ -435,6 +549,230 @@ stop_all() {
     cd "$PROJECT_DIR"
 
     log "All services stopped"
+}
+
+# =============================================================================
+# Cloudflare Tunnel Functions (--tmp-serve-api)
+# =============================================================================
+
+# Tunnel container name prefix
+TUNNEL_PREFIX="api-tunnel"
+
+stop_tunnels() {
+    # Stop all tunnel containers
+    local tunnels
+    tunnels=$(docker ps -aq --filter "name=${TUNNEL_PREFIX}-" 2>/dev/null)
+    if [[ -n "$tunnels" ]]; then
+        log "Stopping API tunnels..."
+        docker rm -f $tunnels 2>/dev/null || true
+    fi
+}
+
+start_tunnel() {
+    local name="$1"
+    local port="$2"
+    local container_name="${TUNNEL_PREFIX}-${name}"
+
+    # Remove existing tunnel if any
+    docker rm -f "$container_name" 2>/dev/null || true
+
+    # Start cloudflared tunnel in background (suppress docker run output)
+    docker run -d --name "$container_name" \
+        --network host \
+        cloudflare/cloudflared:latest \
+        tunnel --no-autoupdate --url "http://localhost:${port}" \
+        >/dev/null 2>&1
+
+    # Wait for tunnel URL to appear in logs (max 30s)
+    local url=""
+    local elapsed=0
+    while [[ -z "$url" ]] && [[ $elapsed -lt 30 ]]; do
+        sleep 2
+        elapsed=$((elapsed + 2))
+        url=$(docker logs "$container_name" 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1)
+    done
+
+    if [[ -n "$url" ]]; then
+        echo "$url"
+    else
+        echo "pending..."
+    fi
+}
+
+get_lan_ip() {
+    # Get primary LAN IP address
+    ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' || \
+    hostname -I 2>/dev/null | awk '{print $1}' || \
+    echo "localhost"
+}
+
+serve_apis_lan() {
+    header "LAN API Access"
+
+    local lan_ip
+    lan_ip=$(get_lan_ip)
+
+    echo ""
+    echo "=========================================="
+    echo "  LAN API Endpoints (http://$lan_ip)"
+    echo "=========================================="
+    echo ""
+
+    # Check and display each service
+    if check_http_health "http://localhost:$CODE_PORT/health"; then
+        printf "  %-12s -> http://%s:%s/v1\n" "code-llm" "$lan_ip" "$CODE_PORT"
+        echo "                  OpenAI-compatible API"
+    fi
+
+    if check_http_health "http://localhost:$NOVNC_PORT"; then
+        printf "  %-12s -> http://%s:%s\n" "novnc" "$lan_ip" "$NOVNC_PORT"
+        echo "                  Browser view (password: secret)"
+    fi
+
+    if check_container_running "$VLM_CONTAINER" && check_http_health "http://localhost:$VLM_PORT/health"; then
+        printf "  %-12s -> http://%s:%s\n" "vlm" "$lan_ip" "$VLM_PORT"
+    fi
+
+    if check_container_running "$OMNIPARSER_CONTAINER" && check_http_health "http://localhost:$OMNIPARSER_PORT/health"; then
+        printf "  %-12s -> http://%s:%s\n" "omniparser" "$lan_ip" "$OMNIPARSER_PORT"
+    fi
+
+    if check_container_running "$GUI_ACTOR_CONTAINER" && check_http_health "http://localhost:$GUI_ACTOR_PORT/health"; then
+        printf "  %-12s -> http://%s:%s\n" "gui-actor" "$lan_ip" "$GUI_ACTOR_PORT"
+    fi
+
+    echo ""
+    echo "  NOTE: Ensure firewall allows access to these ports."
+    echo "  For Ubuntu: sudo ufw allow 8003,6080,8004,8010,8001/tcp"
+    echo "=========================================="
+    echo ""
+
+    # Save LAN URLs to file
+    local url_file="$TOOL_DIR/.lan-urls"
+    > "$url_file"
+    echo "LAN_IP=$lan_ip" >> "$url_file"
+    echo "CODE_LLM=http://${lan_ip}:${CODE_PORT}/v1" >> "$url_file"
+    echo "NOVNC=http://${lan_ip}:${NOVNC_PORT}" >> "$url_file"
+    echo "VLM=http://${lan_ip}:${VLM_PORT}" >> "$url_file"
+    echo "OMNIPARSER=http://${lan_ip}:${OMNIPARSER_PORT}" >> "$url_file"
+    echo "GUI_ACTOR=http://${lan_ip}:${GUI_ACTOR_PORT}" >> "$url_file"
+    log "LAN URLs saved to $url_file"
+}
+
+serve_apis() {
+    local scope="$1"  # "public", "lan", or specific services
+
+    # Handle LAN mode - just display IPs, no tunnels
+    if [[ "$scope" == "lan" ]]; then
+        serve_apis_lan
+        return 0
+    fi
+
+    header "Starting Cloudflare Tunnels"
+
+    # Check if cloudflared image exists, pull if not
+    if ! docker image inspect cloudflare/cloudflared:latest &>/dev/null; then
+        log "Pulling cloudflared image..."
+        docker pull cloudflare/cloudflared:latest
+    fi
+
+    # Stop existing tunnels
+    stop_tunnels
+
+    declare -A tunnel_urls
+
+    # Always tunnel Code LLM if running
+    if check_http_health "http://localhost:$CODE_PORT/health"; then
+        log "Creating tunnel for Code LLM (port $CODE_PORT)..."
+        tunnel_urls["code-llm"]=$(start_tunnel "code-llm" "$CODE_PORT")
+    fi
+
+    # Tunnel noVNC if running
+    if check_http_health "http://localhost:$NOVNC_PORT"; then
+        log "Creating tunnel for noVNC (port $NOVNC_PORT)..."
+        tunnel_urls["novnc"]=$(start_tunnel "novnc" "$NOVNC_PORT")
+    fi
+
+    # Tunnel VLM if running
+    if check_container_running "$VLM_CONTAINER" && check_http_health "http://localhost:$VLM_PORT/health"; then
+        log "Creating tunnel for VLM (port $VLM_PORT)..."
+        tunnel_urls["vlm"]=$(start_tunnel "vlm" "$VLM_PORT")
+    fi
+
+    # Tunnel OmniParser if running
+    if check_container_running "$OMNIPARSER_CONTAINER" && check_http_health "http://localhost:$OMNIPARSER_PORT/health"; then
+        log "Creating tunnel for OmniParser (port $OMNIPARSER_PORT)..."
+        tunnel_urls["omniparser"]=$(start_tunnel "omniparser" "$OMNIPARSER_PORT")
+    fi
+
+    # Tunnel GUI-Actor if running
+    if check_container_running "$GUI_ACTOR_CONTAINER" && check_http_health "http://localhost:$GUI_ACTOR_PORT/health"; then
+        log "Creating tunnel for GUI-Actor (port $GUI_ACTOR_PORT)..."
+        tunnel_urls["gui-actor"]=$(start_tunnel "gui-actor" "$GUI_ACTOR_PORT")
+    fi
+
+    # Display tunnel URLs
+    echo ""
+    echo "=========================================="
+    echo "  Public API Tunnels (trycloudflare.com)"
+    echo "=========================================="
+    echo ""
+
+    for service in "${!tunnel_urls[@]}"; do
+        local url="${tunnel_urls[$service]}"
+        local port=""
+        case "$service" in
+            code-llm) port="$CODE_PORT" ;;
+            novnc) port="$NOVNC_PORT" ;;
+            vlm) port="$VLM_PORT" ;;
+            omniparser) port="$OMNIPARSER_PORT" ;;
+            gui-actor) port="$GUI_ACTOR_PORT" ;;
+        esac
+        printf "  %-12s (:%s) -> %s\n" "$service" "$port" "$url"
+    done
+
+    echo ""
+    echo "  NOTE: These are temporary tunnels that expire when stopped."
+    echo "  Use './local-cc.sh --stop-tunnels' to close them."
+    echo "=========================================="
+    echo ""
+
+    # Save tunnel URLs to a file for reference
+    local tunnel_file="$TOOL_DIR/.tunnel-urls"
+    > "$tunnel_file"
+    for service in "${!tunnel_urls[@]}"; do
+        echo "${service}=${tunnel_urls[$service]}" >> "$tunnel_file"
+    done
+    log "Tunnel URLs saved to $tunnel_file"
+}
+
+show_tunnels() {
+    header "Active API Tunnels"
+
+    local tunnel_file="$TOOL_DIR/.tunnel-urls"
+    local found_tunnels=false
+
+    # Check running tunnel containers
+    local tunnels
+    tunnels=$(docker ps --filter "name=${TUNNEL_PREFIX}-" --format '{{.Names}}' 2>/dev/null)
+
+    if [[ -n "$tunnels" ]]; then
+        echo ""
+        for container in $tunnels; do
+            local service="${container#${TUNNEL_PREFIX}-}"
+            local url
+            url=$(docker logs "$container" 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1)
+            if [[ -n "$url" ]]; then
+                printf "  %-12s -> %s\n" "$service" "$url"
+                found_tunnels=true
+            fi
+        done
+        echo ""
+    fi
+
+    if ! $found_tunnels; then
+        echo "  No active tunnels. Start with: ./local-cc.sh --tmp-serve-api public"
+    fi
 }
 
 # =============================================================================
@@ -527,7 +865,7 @@ EOF
         log "Successfully installed! You can now run 'local-cc' from any project directory."
         echo ""
         echo "Usage:"
-        echo "  local-cc           # Start services and launch Claude Code"
+        echo "  local-cc           # Start services and launch Qwen Code"
         echo "  local-cc --vlm     # Include VLM for image analysis"
         echo "  local-cc --ml      # Include ML services (OmniParser, GUI-Actor)"
         echo "  local-cc --stop    # Stop all services"
@@ -538,56 +876,105 @@ EOF
 }
 
 # =============================================================================
-# Claude CLI Installation
+# Qwen Code CLI Installation
 # =============================================================================
 
-ensure_claude_cli() {
-    if command -v claude &>/dev/null; then
-        log "Claude CLI already installed"
+ensure_qwen_cli() {
+    if command -v qwen &>/dev/null; then
+        log "Qwen Code CLI already installed"
         return 0
     fi
 
-    header "Installing Claude CLI"
-    log "Claude CLI not found. Installing..."
+    header "Installing Qwen Code CLI"
+    log "Qwen Code CLI not found. Installing..."
 
-    # Install using npm (most reliable method)
+    # Install using npm (most reliable method) - use sudo for global install
     if command -v npm &>/dev/null; then
-        npm install -g @anthropic-ai/claude-code
-        if command -v claude &>/dev/null; then
-            log "Claude CLI installed successfully via npm"
+        sudo npm install -g @qwen-code/qwen-code@latest 2>/dev/null || npm install -g @qwen-code/qwen-code@latest
+        if command -v qwen &>/dev/null; then
+            log "Qwen Code CLI installed successfully via npm"
             return 0
         fi
     fi
 
-    # Fallback: direct install script
-    log "Trying direct install script..."
-    curl -fsSL https://claude.ai/install.sh | sh
+    # Fallback: try homebrew on macOS/Linux
+    if command -v brew &>/dev/null; then
+        log "Trying homebrew..."
+        brew install qwen-code
+        if command -v qwen &>/dev/null; then
+            log "Qwen Code CLI installed successfully via homebrew"
+            return 0
+        fi
+    fi
 
-    if command -v claude &>/dev/null; then
-        log "Claude CLI installed successfully"
+    if command -v qwen &>/dev/null; then
+        log "Qwen Code CLI installed successfully"
     else
-        warn "Could not install Claude CLI automatically."
-        warn "Please install manually: npm install -g @anthropic-ai/claude-code"
-        warn "Or visit: https://claude.ai/code"
+        warn "Could not install Qwen Code CLI automatically."
+        warn "Please install manually: sudo npm install -g @qwen-code/qwen-code@latest"
+        warn "Or visit: https://github.com/QwenLM/qwen-code"
     fi
 }
 
 # =============================================================================
-# Launch Claude Code
+# Claude CLI Installation (DEPRECATED - kept for reference)
 # =============================================================================
 
-launch_claude() {
+# ensure_claude_cli() {
+#     if command -v claude &>/dev/null; then
+#         log "Claude CLI already installed"
+#         return 0
+#     fi
+#
+#     header "Installing Claude CLI"
+#     log "Claude CLI not found. Installing..."
+#
+#     # Install using npm (most reliable method)
+#     if command -v npm &>/dev/null; then
+#         npm install -g @anthropic-ai/claude-code
+#         if command -v claude &>/dev/null; then
+#             log "Claude CLI installed successfully via npm"
+#             return 0
+#         fi
+#     fi
+#
+#     # Fallback: direct install script
+#     log "Trying direct install script..."
+#     curl -fsSL https://claude.ai/install.sh | sh
+#
+#     if command -v claude &>/dev/null; then
+#         log "Claude CLI installed successfully"
+#     else
+#         warn "Could not install Claude CLI automatically."
+#         warn "Please install manually: npm install -g @anthropic-ai/claude-code"
+#         warn "Or visit: https://claude.ai/code"
+#     fi
+# }
+
+# =============================================================================
+# Launch Qwen Code
+# =============================================================================
+
+launch_qwen() {
     local include_vlm="$1"
     shift  # Remove include_vlm from args
 
-    header "Launching Claude Code"
+    header "Launching Qwen Code"
 
-    export ANTHROPIC_BASE_URL="http://localhost:$CODE_PORT"
-    export ANTHROPIC_API_KEY='sk-no-key-required'
+    # Configure OpenAI-compatible endpoint
+    # Use remote URL if specified, otherwise local
+    if [[ -n "$REMOTE_CODE_URL" ]]; then
+        export OPENAI_BASE_URL="${REMOTE_CODE_URL}/v1"
+        log "Using remote Code LLM: $REMOTE_CODE_URL"
+    else
+        export OPENAI_BASE_URL="http://localhost:$CODE_PORT/v1"
+    fi
+    export OPENAI_API_KEY='sk-no-key-required'
+    export OPENAI_MODEL="unsloth/Qwen3-Coder-Next"
 
     echo ""
     echo "=========================================="
-    echo "  Local Claude Code Environment Ready"
+    echo "  Local Qwen Code Environment Ready"
     echo "=========================================="
     echo ""
     echo "  Code LLM: http://localhost:$CODE_PORT"
@@ -596,14 +983,47 @@ launch_claude() {
     fi
     echo "  noVNC:    http://localhost:$NOVNC_PORT (password: secret)"
     echo ""
-    echo "  MCP Browser tools available in Claude"
+    echo "  MCP Browser tools available in Qwen Code"
     echo ""
     echo "=========================================="
     echo ""
 
-    # Launch Claude Code
-    exec claude --model "unsloth/Qwen3-Coder-Next" "$@"
+    # Launch Qwen Code
+    exec qwen "$@"
 }
+
+# =============================================================================
+# Launch Claude Code (DEPRECATED - kept for reference)
+# =============================================================================
+
+# launch_claude() {
+#     local include_vlm="$1"
+#     shift  # Remove include_vlm from args
+#
+#     header "Launching Claude Code"
+#
+#     export ANTHROPIC_BASE_URL="http://localhost:$CODE_PORT"
+#     export ANTHROPIC_API_KEY='sk-no-key-required'
+#
+#     echo ""
+#     echo "=========================================="
+#     echo "  Local Claude Code Environment Ready"
+#     echo "=========================================="
+#     echo ""
+#     echo "  Code LLM: http://localhost:$CODE_PORT"
+#     if $include_vlm; then
+#         echo "  VLM:      http://localhost:$VLM_PORT (vlm_chat tool available)"
+#     fi
+#     echo "  noVNC:    http://localhost:$NOVNC_PORT (password: secret)"
+#     echo ""
+#     echo "  MCP Browser tools available in Claude"
+#     echo ""
+#     echo "=========================================="
+#     echo ""
+#
+#     # Launch Claude Code
+#     exec claude --model "unsloth/Qwen3-Coder-Next" "$@"
+# }
 
 # =============================================================================
 # Main
@@ -612,10 +1032,38 @@ launch_claude() {
 main() {
     local include_ml=false
     local include_vlm=false
+    local serve_api=""
     local remaining_args=()
+    local pending_arg=""  # Track which arg is expecting a value
 
     # Parse arguments
     for arg in "$@"; do
+        # Handle pending argument values
+        if [[ -n "$pending_arg" ]]; then
+            case "$pending_arg" in
+                serve_api)
+                    serve_api="$arg"
+                    ;;
+                remote_code)
+                    REMOTE_CODE_URL=$(parse_remote_url "$arg" "$CODE_PORT")
+                    ;;
+                remote_vlm)
+                    REMOTE_VLM_URL=$(parse_remote_url "$arg" "$VLM_PORT")
+                    ;;
+                remote_novnc)
+                    REMOTE_NOVNC_URL=$(parse_remote_url "$arg" "$NOVNC_PORT")
+                    ;;
+                remote_omniparser)
+                    REMOTE_OMNIPARSER_URL=$(parse_remote_url "$arg" "$OMNIPARSER_PORT")
+                    ;;
+                remote_guiactor)
+                    REMOTE_GUI_ACTOR_URL=$(parse_remote_url "$arg" "$GUI_ACTOR_PORT")
+                    ;;
+            esac
+            pending_arg=""
+            continue
+        fi
+
         case "$arg" in
             --stop)
                 stop_all
@@ -629,6 +1077,36 @@ main() {
                 install_command
                 exit 0
                 ;;
+            --tmp-serve-api)
+                pending_arg="serve_api"
+                ;;
+            --stop-tunnels)
+                stop_tunnels
+                log "All API tunnels stopped"
+                exit 0
+                ;;
+            --show-tunnels)
+                show_tunnels
+                exit 0
+                ;;
+            --remote-code)
+                pending_arg="remote_code"
+                ;;
+            --remote-vlm)
+                pending_arg="remote_vlm"
+                ;;
+            --remote-novnc)
+                pending_arg="remote_novnc"
+                ;;
+            --remote-omniparser)
+                pending_arg="remote_omniparser"
+                ;;
+            --remote-gui-actor)
+                pending_arg="remote_guiactor"
+                ;;
+            --insecure-ok)
+                INSECURE_OK=true
+                ;;
             --ml)
                 include_ml=true
                 ;;
@@ -636,22 +1114,36 @@ main() {
                 include_vlm=true
                 ;;
             --help|-h)
-                echo "Usage: $0 [OPTIONS] [-- CLAUDE_ARGS]"
+                echo "Usage: $0 [OPTIONS] [-- QWEN_ARGS]"
                 echo ""
-                echo "Options:"
-                echo "  --vlm       Include VLM for image analysis (vlm_chat tool)"
-                echo "  --ml        Include ML services (OmniParser, GUI-Actor)"
-                echo "  --stop      Stop all services"
-                echo "  --status    Show status of all services"
-                echo "  --install   Install as 'local-cc' command"
-                echo "  --help      Show this help message"
+                echo "Local Services:"
+                echo "  --vlm                    Include VLM for image analysis (vlm_chat tool)"
+                echo "  --ml                     Include ML services (OmniParser, GUI-Actor)"
+                echo "  --stop                   Stop all services"
+                echo "  --status                 Show status of all services"
+                echo "  --install                Install as 'local-cc' command"
+                echo ""
+                echo "Remote Servers (use instead of local):"
+                echo "  --remote-code URL        Use remote Code LLM (e.g., https://xxx.trycloudflare.com)"
+                echo "  --remote-vlm URL         Use remote VLM server"
+                echo "  --remote-novnc URL       Use remote noVNC browser"
+                echo "  --remote-omniparser URL  Use remote OmniParser"
+                echo "  --remote-gui-actor URL   Use remote GUI-Actor"
+                echo "  --insecure-ok            Skip HTTP security warnings"
+                echo ""
+                echo "Sharing (expose local APIs):"
+                echo "  --tmp-serve-api public   Create Cloudflare tunnels for all running APIs"
+                echo "  --tmp-serve-api lan      Show LAN IP addresses for all running APIs"
+                echo "  --stop-tunnels           Stop all API tunnels"
+                echo "  --show-tunnels           Show active tunnel URLs"
                 echo ""
                 echo "Examples:"
-                echo "  $0                    # Start services and launch Claude"
-                echo "  $0 --vlm              # Start with VLM for image analysis"
-                echo "  $0 --vlm --ml         # Start with VLM and ML services"
-                echo "  $0 --stop             # Stop all services"
-                echo "  $0 -- --resume        # Pass --resume to Claude"
+                echo "  $0                                    # Start local services"
+                echo "  $0 --vlm --ml                         # Start with all ML services"
+                echo "  $0 --tmp-serve-api public             # Share via Cloudflare tunnels"
+                echo "  $0 --remote-code https://xxx.trycloudflare.com  # Use remote LLM"
+                echo "  $0 --remote-code 192.168.1.10:8003    # Use LAN server"
+                echo "  $0 -- --resume                        # Pass --resume to Qwen Code"
                 exit 0
                 ;;
             --)
@@ -665,41 +1157,81 @@ main() {
         esac
     done
 
-    # Ensure we have required tools
-    command -v docker &>/dev/null || error "Docker not found. Please install Docker."
-    command -v hf &>/dev/null || error "hf CLI not found. Install with: pip install huggingface_hub[cli]"
+    # Validate remote URLs for security
+    check_url_security "$REMOTE_CODE_URL" "Code LLM"
+    check_url_security "$REMOTE_VLM_URL" "VLM"
+    check_url_security "$REMOTE_NOVNC_URL" "noVNC"
+    check_url_security "$REMOTE_OMNIPARSER_URL" "OmniParser"
+    check_url_security "$REMOTE_GUI_ACTOR_URL" "GUI-Actor"
 
-    # Run setup steps
-    ensure_models
-    ensure_llama_image
-    ensure_browser_images
+    # Check if using any remote services
+    local use_remote_code=false
+    local use_remote_all=false
+    [[ -n "$REMOTE_CODE_URL" ]] && use_remote_code=true
 
-    if $include_vlm; then
+    # If all main services are remote, skip local Docker requirements
+    if [[ -n "$REMOTE_CODE_URL" ]] && [[ -n "$REMOTE_NOVNC_URL" ]]; then
+        use_remote_all=true
+    fi
+
+    # Only require Docker if not using all remote services
+    if ! $use_remote_all; then
+        command -v docker &>/dev/null || error "Docker not found. Please install Docker."
+        command -v hf &>/dev/null || error "hf CLI not found. Install with: pip install huggingface_hub[cli]"
+    fi
+
+    # Run setup steps only for local services
+    if ! $use_remote_code; then
+        ensure_models
+        ensure_llama_image
+    fi
+
+    if [[ -z "$REMOTE_NOVNC_URL" ]]; then
+        ensure_browser_images
+    fi
+
+    if $include_vlm && [[ -z "$REMOTE_VLM_URL" ]]; then
         header "Building VLM Image (if needed)"
         cd "$BROWSER_DIR"
         docker compose --profile vlm build vlm 2>/dev/null || log "VLM image already built or building..."
         cd "$PROJECT_DIR"
     fi
 
-    if $include_ml; then
+    if $include_ml && [[ -z "$REMOTE_OMNIPARSER_URL" ]] && [[ -z "$REMOTE_GUI_ACTOR_URL" ]]; then
         ensure_ml_images
     fi
 
-    # Start services
-    start_llm_servers
-    start_browser_services "$include_vlm"
+    # Start local services (skip if using remote)
+    if ! $use_remote_code; then
+        start_llm_servers
+    else
+        header "Using Remote Code LLM"
+        log "Remote Code LLM: $REMOTE_CODE_URL"
+    fi
+
+    if [[ -z "$REMOTE_NOVNC_URL" ]]; then
+        start_browser_services "$include_vlm"
+    else
+        header "Using Remote Browser"
+        log "Remote noVNC: $REMOTE_NOVNC_URL"
+    fi
 
     if $include_ml; then
         start_ml_services
     fi
 
-    # Setup MCP and Claude CLI
+    # Setup MCP and Qwen Code CLI
     ensure_mcp_server
-    ensure_claude_cli
-    configure_claude_mcp
+    ensure_qwen_cli
+    configure_qwen_mcp
 
-    # Launch Claude
-    launch_claude "$include_vlm" "${remaining_args[@]}"
+    # Start API tunnels if requested
+    if [[ -n "$serve_api" ]] && [[ "$serve_api" != "pending" ]]; then
+        serve_apis "$serve_api"
+    fi
+
+    # Launch Qwen Code
+    launch_qwen "$include_vlm" "${remaining_args[@]}"
 }
 
 main "$@"
