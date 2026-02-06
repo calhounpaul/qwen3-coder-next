@@ -124,8 +124,14 @@ docker restart qwen3-server           # Restart Code LLM only
 docker restart automation-vlm         # Restart VLM only
 docker restart automation-browser     # Restart browser only
 
-# Remote: connect via single gateway tunnel
-./local-cc.sh --remote-tunnel URL --tunnel-key SECRET --vlm
+# Server mode: Code LLM + browser only (ML services run on client)
+./local-cc.sh --tmp-serve-api single --server-only
+
+# Client mode with local ML (hybrid): Code LLM + browser remote, VLM/ML local
+./local-cc.sh --client-only --remote-tunnel URL --tunnel-key SECRET --local-ml
+
+# Remote: connect via single gateway tunnel (all services remote)
+./local-cc.sh --remote-tunnel URL --tunnel-key SECRET --vlm --ml
 
 # Remote: connect to individual services
 ./local-cc.sh --remote-code URL --remote-vlm URL --remote-novnc URL --remote-cdp URL --vlm
@@ -136,11 +142,28 @@ docker restart automation-browser     # Restart browser only
 | Mode | Flag | Requirements | Use Case |
 |------|------|-------------|----------|
 | Full (default) | _(none)_ | Docker + GPU + npm | Local development with all services |
-| Server only | `--server-only` | Docker + GPU | Headless server exposing APIs (no Qwen Code installed) |
-| Client only | `--client-only` | pip + npm | Connect to remote server (no Docker/GPU needed) |
+| Server only | `--server-only` | Docker + GPU | Headless server exposing APIs (no Qwen Code) |
+| Client only | `--client-only` | pip + npm | Connect to remote server (no Docker/GPU) |
+| Hybrid | `--client-only --local-ml` | Docker + GPU | Remote LLM + local ML services |
 
-- **Server only**: Starts all services and tunnels, prints status, then exits. Does not install or launch Qwen Code.
-- **Client only**: Skips all Docker/GPU/model operations. Only installs MCP server + Qwen Code, then connects to remote services. Requires `--remote-*` flags.
+- **Server only**: Starts Code LLM + browser + tunnel, prints status, then exits.
+- **Client only**: Skips all Docker/GPU. Connects to remote services via `--remote-*` flags.
+- **Hybrid (recommended for 2x GPU clients)**: Uses remote Code LLM + browser, runs VLM/OmniParser/GUI-Actor locally on GPU 0. Ideal when server has large model (Q4_K_M uses ~48GB) but client has spare GPU capacity.
+
+### Hybrid Mode Example
+
+**Server (A6000 48GB)**: Run the large Code LLM + browser
+```bash
+./local-cc.sh --tmp-serve-api single --server-only
+# Outputs: URL + secret (no --vlm or --ml, those run on client)
+```
+
+**Client (2x RTX 3090)**: Connect to server, run ML locally on GPU 0
+```bash
+./local-cc.sh --client-only --remote-tunnel URL --tunnel-key SECRET --local-ml
+```
+
+This keeps the server's 48GB VRAM for the Code LLM with full context, while ML services (~5GB each) run on the client's GPU 0.
 
 Qwen Code telemetry is automatically disabled during installation (writes `~/.qwen/settings.json`).
 

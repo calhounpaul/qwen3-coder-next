@@ -1270,6 +1270,7 @@ launch_qwen() {
 main() {
     local include_ml=false
     local include_vlm=false
+    local local_ml=false  # Run ML services locally even in client mode
     local serve_api=""
     local server_only=false
     local client_only=false
@@ -1377,6 +1378,11 @@ main() {
             --vlm)
                 include_vlm=true
                 ;;
+            --local-ml)
+                local_ml=true
+                include_vlm=true
+                include_ml=true
+                ;;
             --help|-h)
                 echo "Usage: $0 [OPTIONS] [-- QWEN_ARGS]"
                 echo ""
@@ -1388,6 +1394,7 @@ main() {
                 echo "Local Services:"
                 echo "  --vlm                    Include VLM for image analysis (vlm_chat tool)"
                 echo "  --ml                     Include ML services (OmniParser, GUI-Actor)"
+                echo "  --local-ml               Run VLM/ML locally even in client mode (uses GPU 0)"
                 echo "  --stop                   Stop all services"
                 echo "  --status                 Show status of all services"
                 echo "  --install                Install as 'local-cc' command"
@@ -1445,11 +1452,14 @@ main() {
     if [[ -n "$REMOTE_TUNNEL_URL" ]]; then
         local base="${REMOTE_TUNNEL_URL%/}"
         REMOTE_CODE_URL="$base/code-llm"
-        REMOTE_VLM_URL="$base/vlm"
         REMOTE_NOVNC_URL="$base"
-        REMOTE_OMNIPARSER_URL="$base/omniparser"
-        REMOTE_GUI_ACTOR_URL="$base/gui-actor"
         REMOTE_CDP_URL="$base/cdp"
+        # Only use remote ML services if --local-ml is NOT set
+        if ! $local_ml; then
+            REMOTE_VLM_URL="$base/vlm"
+            REMOTE_OMNIPARSER_URL="$base/omniparser"
+            REMOTE_GUI_ACTOR_URL="$base/gui-actor"
+        fi
     fi
 
     # E2E Encryption: Start chisel tunnel when using remote gateway + key
@@ -1468,18 +1478,29 @@ main() {
         local chisel_url="${REMOTE_TUNNEL_URL%/}/chisel"
         log "Connecting to chisel server at $chisel_url"
 
-        # Start chisel client - forward all service ports through encrypted tunnel
+        # Build port forward list - skip ML ports if --local-ml is set
+        local chisel_forwards=(
+            "$CODE_PORT:localhost:$CODE_PORT"
+            "$CDP_PORT:localhost:$CDP_PORT"
+            "$NOVNC_PORT:localhost:$NOVNC_PORT"
+        )
+        if ! $local_ml; then
+            chisel_forwards+=(
+                "$VLM_PORT:localhost:$VLM_PORT"
+                "$OMNIPARSER_PORT:localhost:$OMNIPARSER_PORT"
+                "$GUI_ACTOR_PORT:localhost:$GUI_ACTOR_PORT"
+            )
+        else
+            log "Using local ML services (VLM, OmniParser, GUI-Actor)"
+        fi
+
+        # Start chisel client - forward service ports through encrypted tunnel
         docker run -d --name automation-chisel-client \
             --network host \
             jpillora/chisel client \
             --auth "tunnel:$TUNNEL_KEY" \
             "$chisel_url" \
-            "$CODE_PORT:localhost:$CODE_PORT" \
-            "$VLM_PORT:localhost:$VLM_PORT" \
-            "$OMNIPARSER_PORT:localhost:$OMNIPARSER_PORT" \
-            "$GUI_ACTOR_PORT:localhost:$GUI_ACTOR_PORT" \
-            "$CDP_PORT:localhost:$CDP_PORT" \
-            "$NOVNC_PORT:localhost:$NOVNC_PORT" \
+            "${chisel_forwards[@]}" \
             >/dev/null 2>&1
 
         # Wait for chisel connection
@@ -1497,13 +1518,17 @@ main() {
         if $chisel_connected; then
             log "Chisel tunnel connected (E2E encrypted)"
 
-            # Override all remote URLs to localhost - traffic goes through chisel
+            # Override remote URLs to localhost - traffic goes through chisel
             REMOTE_CODE_URL="http://localhost:$CODE_PORT"
-            REMOTE_VLM_URL="http://localhost:$VLM_PORT"
             REMOTE_NOVNC_URL="http://localhost:$NOVNC_PORT"
-            REMOTE_OMNIPARSER_URL="http://localhost:$OMNIPARSER_PORT"
-            REMOTE_GUI_ACTOR_URL="http://localhost:$GUI_ACTOR_PORT"
             REMOTE_CDP_URL="http://localhost:$CDP_PORT"
+
+            # Only override ML URLs if not using local ML
+            if ! $local_ml; then
+                REMOTE_VLM_URL="http://localhost:$VLM_PORT"
+                REMOTE_OMNIPARSER_URL="http://localhost:$OMNIPARSER_PORT"
+                REMOTE_GUI_ACTOR_URL="http://localhost:$GUI_ACTOR_PORT"
+            fi
 
             # Clear TUNNEL_KEY - chisel handles auth+encryption
             TUNNEL_KEY=""
