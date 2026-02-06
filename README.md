@@ -9,6 +9,8 @@ Unified local LLM inference environment with browser automation MCP integration 
 ./local-cc.sh --vlm                   # Include VLM for image analysis
 ./local-cc.sh --ml                    # Include ML services (OmniParser, GUI-Actor)
 ./local-cc.sh --vlm --ml              # All services
+./local-cc.sh --server-only           # Start services only (no Qwen Code, for headless/remote servers)
+./local-cc.sh --client-only --remote-tunnel URL --tunnel-key SECRET  # Client only (no Docker/GPU needed)
 ./local-cc.sh --tmp-serve-api single  # Expose all APIs via single gateway tunnel (recommended)
 ./local-cc.sh --tmp-serve-api public  # Individual Cloudflare tunnels per service
 ./local-cc.sh --tmp-serve-api lan     # Show LAN access URLs
@@ -116,11 +118,28 @@ When using `--remote-tunnel`, all `REMOTE_*_URL` vars are auto-derived from the 
 
 **Security**: Using HTTP with non-local domains will trigger a security warning. Use HTTPS or add `--insecure-ok` to skip the warning.
 
+**Privacy note**: Cloudflare quick tunnels terminate TLS at Cloudflare's edge, meaning Cloudflare can inspect traffic in transit. The shared secret provides authentication (preventing unauthorized access) but not end-to-end encryption from Cloudflare. For sensitive workloads, use a VPN (e.g., Tailscale) or SSH tunneling instead.
+
+## Deployment Modes
+
+| Mode | Flag | Requirements | Use Case |
+|------|------|-------------|----------|
+| Full (default) | _(none)_ | Docker + GPU + npm | Local development with all services |
+| Server only | `--server-only` | Docker + GPU | Headless server exposing APIs (no Qwen Code) |
+| Client only | `--client-only` | pip + npm | Connect to remote server (no Docker/GPU needed) |
+
+Qwen Code telemetry is automatically disabled on install.
+
 ## Requirements
 
+**Full / Server mode:**
 - Docker with NVIDIA GPU support
 - `hf` CLI (`pip install huggingface_hub`)
-- Qwen Code CLI (`npm install -g @qwen-code/qwen-code@latest`)
+
+**Client mode** (`--client-only`):
+- Python 3.10+ with pip
+- npm (for Qwen Code CLI)
+- No Docker or GPU required
 
 ## License
 

@@ -90,6 +90,8 @@ For remote services, MLServiceManager:
 ./local-cc.sh --vlm                   # Include VLM for image analysis (vlm_chat tool)
 ./local-cc.sh --ml                    # Include ML services (OmniParser, GUI-Actor)
 ./local-cc.sh --vlm --ml              # Include all services
+./local-cc.sh --server-only           # Start services only, no Qwen Code (headless/remote servers)
+./local-cc.sh --client-only --remote-tunnel URL --tunnel-key SECRET  # Client only (no Docker/GPU)
 ./local-cc.sh --tmp-serve-api single  # Single gateway tunnel for all services (recommended)
 ./local-cc.sh --tmp-serve-api public  # Individual Cloudflare tunnels per service
 ./local-cc.sh --tmp-serve-api lan     # Show LAN IP addresses for API access
@@ -103,6 +105,19 @@ For remote services, MLServiceManager:
 # Remote: connect to individual services
 ./local-cc.sh --remote-code URL --remote-vlm URL --remote-novnc URL --remote-cdp URL --vlm
 ```
+
+## Deployment Modes
+
+| Mode | Flag | Requirements | Use Case |
+|------|------|-------------|----------|
+| Full (default) | _(none)_ | Docker + GPU + npm | Local development with all services |
+| Server only | `--server-only` | Docker + GPU | Headless server exposing APIs (no Qwen Code installed) |
+| Client only | `--client-only` | pip + npm | Connect to remote server (no Docker/GPU needed) |
+
+- **Server only**: Starts all services and tunnels, prints status, then exits. Does not install or launch Qwen Code.
+- **Client only**: Skips all Docker/GPU/model operations. Only installs MCP server + Qwen Code, then connects to remote services. Requires `--remote-*` flags.
+
+Qwen Code telemetry is automatically disabled during installation (writes `~/.qwen/settings.json`).
 
 ## Directory Structure
 
@@ -200,6 +215,8 @@ TUNNEL_URL.trycloudflare.com -> Caddy:8888  /omniparser/*  -> localhost:8010
 - **Config**: `mcp-browser-co-gnome/Caddyfile.gateway`
 
 On the client side, `--remote-tunnel URL --tunnel-key SECRET` auto-derives all `REMOTE_*_URL` vars and exports `TUNNEL_KEY` for the MCP server.
+
+**Privacy note**: Cloudflare quick tunnels terminate TLS at Cloudflare's edge, meaning Cloudflare can inspect traffic in transit. The shared secret provides authentication but not end-to-end encryption from Cloudflare. For sensitive workloads, use a VPN (e.g., Tailscale) or SSH tunneling instead.
 
 ## MCP Browser Tools
 

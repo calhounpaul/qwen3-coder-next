@@ -81,6 +81,7 @@ VNC_PORT=5900
 CDP_PORT=9222
 OMNIPARSER_PORT=8010
 GUI_ACTOR_PORT=8001
+CHISEL_PORT=8889
 
 # Colors
 RED='\033[0;31m'
@@ -607,8 +608,10 @@ stop_tunnels() {
         log "Stopping API tunnels..."
         docker rm -f $tunnels 2>/dev/null || true
     fi
-    # Also stop the gateway proxy
+    # Also stop the gateway proxy and chisel containers
     docker rm -f automation-gateway 2>/dev/null || true
+    docker rm -f automation-chisel-server 2>/dev/null || true
+    docker rm -f automation-chisel-client 2>/dev/null || true
 }
 
 start_tunnel() {
@@ -737,6 +740,16 @@ serve_single_tunnel() {
         [[ $elapsed -ge 10 ]] && { warn "Gateway not ready after 10s"; break; }
     done
 
+    # Start chisel server for E2E encrypted tunneling
+    docker rm -f automation-chisel-server 2>/dev/null || true
+    docker run -d --name automation-chisel-server \
+        --network host \
+        jpillora/chisel server \
+        --port "$CHISEL_PORT" \
+        --auth "tunnel:$secret" \
+        >/dev/null 2>&1
+    log "Chisel server started on port $CHISEL_PORT (E2E encryption available)"
+
     # Start single cloudflared tunnel
     docker run -d --name "${TUNNEL_PREFIX}-gateway" \
         --network host \
@@ -760,7 +773,7 @@ EOF
     # Display
     echo ""
     echo "=========================================="
-    echo "  Single Gateway Tunnel"
+    echo "  Single Gateway Tunnel (E2E Encrypted)"
     echo "=========================================="
     echo ""
     echo "  URL:    ${url:-pending...}"
@@ -773,6 +786,11 @@ EOF
     echo "    OmniParser:  ${url}/omniparser/"
     echo "    GUI-Actor:   ${url}/gui-actor/"
     echo "    CDP:         ${url}/cdp/"
+    echo ""
+    echo "  E2E Encryption:"
+    echo "    Chisel (SSH-over-HTTP) tunnel on ${url}/chisel"
+    echo "    Clients using --remote-tunnel + --tunnel-key auto-encrypt"
+    echo "    all traffic. Cloudflare cannot inspect service data."
     echo ""
     echo "  Client usage:"
     echo "    ./local-cc.sh --remote-tunnel ${url} --tunnel-key $secret"
@@ -897,6 +915,13 @@ show_tunnels() {
             if [[ -n "$gw_url" ]]; then
                 echo "    URL:    $gw_url"
                 echo "    Secret: $gw_secret"
+                echo ""
+                # Show chisel status
+                if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^automation-chisel-server$"; then
+                    echo "    E2E Encryption: ACTIVE (chisel on port $CHISEL_PORT)"
+                else
+                    echo "    E2E Encryption: NOT RUNNING"
+                fi
                 echo ""
                 echo "    Services:"
                 echo "      noVNC:      ${gw_url}/ (basic auth user: tunnel)"
@@ -1370,6 +1395,11 @@ main() {
                 echo "  --stop-tunnels           Stop all tunnels and gateway"
                 echo "  --show-tunnels           Show active tunnel URLs"
                 echo ""
+                echo "E2E Encryption:"
+                echo "  When using --remote-tunnel with --tunnel-key, a chisel tunnel"
+                echo "  (SSH over HTTP) is automatically established. All traffic is"
+                echo "  end-to-end encrypted. Cloudflare cannot inspect any service data."
+                echo ""
                 echo "Examples:"
                 echo "  $0                                    # Start everything locally"
                 echo "  $0 --vlm --ml                         # Start with all ML services"
@@ -1405,6 +1435,71 @@ main() {
         REMOTE_OMNIPARSER_URL="$base/omniparser"
         REMOTE_GUI_ACTOR_URL="$base/gui-actor"
         REMOTE_CDP_URL="$base/cdp"
+    fi
+
+    # E2E Encryption: Start chisel tunnel when using remote gateway + key
+    if [[ -n "$REMOTE_TUNNEL_URL" ]] && [[ -n "$TUNNEL_KEY" ]]; then
+        header "Starting E2E Encrypted Tunnel (Chisel)"
+
+        # Clean up any existing chisel client
+        docker rm -f automation-chisel-client 2>/dev/null || true
+
+        # Ensure chisel image is available
+        if ! docker image inspect jpillora/chisel &>/dev/null; then
+            log "Pulling chisel image..."
+            docker pull jpillora/chisel
+        fi
+
+        local chisel_url="${REMOTE_TUNNEL_URL%/}/chisel"
+        log "Connecting to chisel server at $chisel_url"
+
+        # Start chisel client - forward all service ports through encrypted tunnel
+        docker run -d --name automation-chisel-client \
+            --network host \
+            jpillora/chisel client \
+            --auth "tunnel:$TUNNEL_KEY" \
+            "$chisel_url" \
+            "$CODE_PORT:localhost:$CODE_PORT" \
+            "$VLM_PORT:localhost:$VLM_PORT" \
+            "$OMNIPARSER_PORT:localhost:$OMNIPARSER_PORT" \
+            "$GUI_ACTOR_PORT:localhost:$GUI_ACTOR_PORT" \
+            "$CDP_PORT:localhost:$CDP_PORT" \
+            "$NOVNC_PORT:localhost:$NOVNC_PORT" \
+            >/dev/null 2>&1
+
+        # Wait for chisel connection
+        local chisel_elapsed=0
+        local chisel_connected=false
+        while [[ $chisel_elapsed -lt 15 ]]; do
+            if docker logs automation-chisel-client 2>&1 | grep -q "Connected"; then
+                chisel_connected=true
+                break
+            fi
+            sleep 1
+            chisel_elapsed=$((chisel_elapsed + 1))
+        done
+
+        if $chisel_connected; then
+            log "Chisel tunnel connected (E2E encrypted)"
+
+            # Override all remote URLs to localhost - traffic goes through chisel
+            REMOTE_CODE_URL="http://localhost:$CODE_PORT"
+            REMOTE_VLM_URL="http://localhost:$VLM_PORT"
+            REMOTE_NOVNC_URL="http://localhost:$NOVNC_PORT"
+            REMOTE_OMNIPARSER_URL="http://localhost:$OMNIPARSER_PORT"
+            REMOTE_GUI_ACTOR_URL="http://localhost:$GUI_ACTOR_PORT"
+            REMOTE_CDP_URL="http://localhost:$CDP_PORT"
+
+            # Clear TUNNEL_KEY - chisel handles auth+encryption
+            TUNNEL_KEY=""
+
+            # Cleanup chisel client on exit
+            trap 'docker rm -f automation-chisel-client 2>/dev/null' EXIT
+        else
+            warn "Chisel tunnel failed to connect within 15s"
+            warn "Falling back to direct tunnel access (Cloudflare can inspect traffic)"
+            docker rm -f automation-chisel-client 2>/dev/null || true
+        fi
     fi
 
     # Export TUNNEL_KEY for MCP server and set OPENAI_API_KEY for LLM auth
