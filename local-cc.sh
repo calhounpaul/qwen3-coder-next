@@ -204,9 +204,9 @@ select_model_quant() {
         return
     fi
 
-    # RTX A6000 (48GB) - can fit Q3_K_S (34.6GB) with room for KV cache
+    # RTX A6000 (48GB) - with 65k context, can fit Q4_K_M (48.5GB) with room for KV cache
     if echo "$gpu_names" | grep -qi "A6000"; then
-        echo "Qwen3-Coder-Next-Q3_K_S.gguf"
+        echo "Qwen3-Coder-Next-Q4_K_M.gguf"
     # Dual RTX 3090 (24GB each) - IQ3_XXS across both GPUs
     elif [[ $(echo "$gpu_names" | grep -ci "RTX 3090") -ge 2 ]]; then
         echo "Qwen3-Coder-Next-UD-IQ3_XXS.gguf"
@@ -405,7 +405,7 @@ start_llm_servers() {
             --model "/models/$CODE_MODEL_DIR/$CODE_MODEL_FILE" \
             --alias "unsloth/Qwen3-Coder-Next" \
             --n-gpu-layers 999 \
-            --ctx-size 120000 \
+            --ctx-size 65000 \
             --context-shift \
             --port 8080 \
             --jinja \
@@ -508,8 +508,8 @@ configure_qwen_mcp() {
     local qwen_settings_dir="$HOME/.qwen"
     local qwen_settings_file="$qwen_settings_dir/settings.json"
 
-    # Context window matches --ctx-size 120000 in llama-server
-    local ctx_size=120000
+    # Context window matches --ctx-size 65000 in llama-server
+    local ctx_size=65000
 
     local tmp_settings
     tmp_settings=$(python3 -c "
