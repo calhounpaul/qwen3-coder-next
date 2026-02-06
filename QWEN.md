@@ -41,6 +41,25 @@ Environment variables:
 - `ML_IDLE_TIMEOUT` (default: 300) - Seconds before idle shutdown
 - `ML_ALWAYS_ON` - Comma-separated service names to never auto-stop
 
+### Remote Service URLs
+
+The MCP server supports connecting to remote services via environment variables. When set, the corresponding service is treated as externally managed (no Docker start/stop).
+
+| Env Variable | Default | Used By |
+|-------------|---------|---------|
+| `VLM_URL` | `http://localhost:8004` | `mcp_server.py`, `ml_services.py` |
+| `OMNIPARSER_URL` | `http://localhost:8010` | `mcp_server.py`, `ml_services.py` |
+| `GUI_ACTOR_URL` | `http://localhost:8001` | `mcp_server.py`, `ml_services.py` |
+| `CDP_ENDPOINT` | (empty = auto-detect Docker) | `mcp_server.py` |
+
+These are set automatically by `local-cc.sh` when `--remote-*` flags are used. The MCP server subprocess inherits them via `exec qwen`.
+
+For remote services, MLServiceManager:
+- Skips Docker compose start/stop
+- Only performs health checks against the remote URL
+- Skips mutual exclusion (remote services don't use local GPU)
+- Skips idle timeout shutdown
+
 ### Key Directories
 
 | Directory | Purpose | Git Status |
@@ -72,6 +91,9 @@ Environment variables:
 ./local-cc.sh --stop                 # Stop all services
 ./local-cc.sh --status               # Check service status
 ./local-cc.sh --install              # Install as 'local-cc' command (run from anywhere)
+
+# Remote: use services running on another machine
+./local-cc.sh --remote-code URL --remote-vlm URL --remote-novnc URL --remote-cdp URL --vlm
 ```
 
 ## Directory Structure

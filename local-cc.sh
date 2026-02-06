@@ -104,6 +104,7 @@ header() { echo -e "\n${CYAN}=== $1 ===${NC}\n"; }
 REMOTE_CODE_URL=""
 REMOTE_VLM_URL=""
 REMOTE_NOVNC_URL=""
+REMOTE_CDP_URL=""
 REMOTE_OMNIPARSER_URL=""
 REMOTE_GUI_ACTOR_URL=""
 
@@ -972,16 +973,43 @@ launch_qwen() {
     export OPENAI_API_KEY='sk-no-key-required'
     export OPENAI_MODEL="unsloth/Qwen3-Coder-Next"
 
+    # Export remote ML service URLs for MCP server (novnc-mcp inherits env)
+    [[ -n "$REMOTE_VLM_URL" ]] && export VLM_URL="$REMOTE_VLM_URL"
+    [[ -n "$REMOTE_OMNIPARSER_URL" ]] && export OMNIPARSER_URL="$REMOTE_OMNIPARSER_URL"
+    [[ -n "$REMOTE_GUI_ACTOR_URL" ]] && export GUI_ACTOR_URL="$REMOTE_GUI_ACTOR_URL"
+    [[ -n "$REMOTE_CDP_URL" ]] && export CDP_ENDPOINT="$REMOTE_CDP_URL"
+
     echo ""
     echo "=========================================="
-    echo "  Local Qwen Code Environment Ready"
+    echo "  Qwen Code Environment Ready"
     echo "=========================================="
     echo ""
-    echo "  Code LLM: http://localhost:$CODE_PORT"
-    if $include_vlm; then
-        echo "  VLM:      http://localhost:$VLM_PORT (vlm_chat tool available)"
+    if [[ -n "$REMOTE_CODE_URL" ]]; then
+        echo "  Code LLM: $REMOTE_CODE_URL (remote)"
+    else
+        echo "  Code LLM: http://localhost:$CODE_PORT"
     fi
-    echo "  noVNC:    http://localhost:$NOVNC_PORT (password: secret)"
+    if $include_vlm; then
+        if [[ -n "$REMOTE_VLM_URL" ]]; then
+            echo "  VLM:      $REMOTE_VLM_URL (remote)"
+        else
+            echo "  VLM:      http://localhost:$VLM_PORT"
+        fi
+    fi
+    if [[ -n "$REMOTE_NOVNC_URL" ]]; then
+        echo "  noVNC:    $REMOTE_NOVNC_URL (remote)"
+    else
+        echo "  noVNC:    http://localhost:$NOVNC_PORT (password: secret)"
+    fi
+    if [[ -n "$REMOTE_CDP_URL" ]]; then
+        echo "  CDP:      $REMOTE_CDP_URL (remote)"
+    fi
+    if [[ -n "$REMOTE_OMNIPARSER_URL" ]]; then
+        echo "  OmniParser: $REMOTE_OMNIPARSER_URL (remote)"
+    fi
+    if [[ -n "$REMOTE_GUI_ACTOR_URL" ]]; then
+        echo "  GUI-Actor: $REMOTE_GUI_ACTOR_URL (remote)"
+    fi
     echo ""
     echo "  MCP Browser tools available in Qwen Code"
     echo ""
@@ -1059,6 +1087,9 @@ main() {
                 remote_guiactor)
                     REMOTE_GUI_ACTOR_URL=$(parse_remote_url "$arg" "$GUI_ACTOR_PORT")
                     ;;
+                remote_cdp)
+                    REMOTE_CDP_URL=$(parse_remote_url "$arg" "$CDP_PORT")
+                    ;;
             esac
             pending_arg=""
             continue
@@ -1104,6 +1135,9 @@ main() {
             --remote-gui-actor)
                 pending_arg="remote_guiactor"
                 ;;
+            --remote-cdp)
+                pending_arg="remote_cdp"
+                ;;
             --insecure-ok)
                 INSECURE_OK=true
                 ;;
@@ -1129,6 +1163,7 @@ main() {
                 echo "  --remote-novnc URL       Use remote noVNC browser"
                 echo "  --remote-omniparser URL  Use remote OmniParser"
                 echo "  --remote-gui-actor URL   Use remote GUI-Actor"
+                echo "  --remote-cdp URL         Use remote CDP endpoint (browser automation)"
                 echo "  --insecure-ok            Skip HTTP security warnings"
                 echo ""
                 echo "Sharing (expose local APIs):"
@@ -1163,6 +1198,7 @@ main() {
     check_url_security "$REMOTE_NOVNC_URL" "noVNC"
     check_url_security "$REMOTE_OMNIPARSER_URL" "OmniParser"
     check_url_security "$REMOTE_GUI_ACTOR_URL" "GUI-Actor"
+    check_url_security "$REMOTE_CDP_URL" "CDP"
 
     # Check if using any remote services
     local use_remote_code=false

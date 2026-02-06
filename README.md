@@ -99,10 +99,13 @@ Connect to remote servers instead of starting local services:
 # All remote options:
 #   --remote-code URL        Remote Code LLM
 #   --remote-vlm URL         Remote VLM server
-#   --remote-novnc URL       Remote browser
+#   --remote-novnc URL       Remote browser (noVNC viewer)
+#   --remote-cdp URL         Remote CDP endpoint (browser automation)
 #   --remote-omniparser URL  Remote OmniParser
 #   --remote-gui-actor URL   Remote GUI-Actor
 ```
+
+When using `--remote-*` flags, the corresponding local Docker service is skipped. The MCP server reads remote URLs from environment variables (`VLM_URL`, `OMNIPARSER_URL`, `GUI_ACTOR_URL`, `CDP_ENDPOINT`) which are automatically set by `local-cc.sh`.
 
 **Security**: Using HTTP with non-local domains will trigger a security warning. Use HTTPS or add `--insecure-ok` to skip the warning.
 

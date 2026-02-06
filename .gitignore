@@ -1,7 +1,12 @@
-# User-specific scripts (legacy)
+# User-specific scripts
 run-qwen3-server.sh
 run-cc-qwen.sh
 run-docker-servers.sh
+run-remote.sh
+
+# Session-specific tunnel/LAN URLs
+.tunnel-urls
+.lan-urls
 
 # Claude local settings (may contain user paths)
 .claude/
