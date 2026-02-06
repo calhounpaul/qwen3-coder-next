@@ -413,6 +413,7 @@ start_llm_servers() {
             --cache-type-k q8_0 --cache-type-v q8_0 \
             --flash-attn on \
             --temp 1.0 --top-p 0.95 --min-p 0.01 --top-k 40 \
+            --repeat-penalty 1.1 --repeat-last-n 256 \
             --batch-size 4096 --ubatch-size 1024
     fi
 
