@@ -82,7 +82,6 @@ CDP_PORT=9222
 OMNIPARSER_PORT=8010
 GUI_ACTOR_PORT=8001
 CHISEL_PORT=8889
-PROXY_PORT=8013
 
 # Colors
 RED='\033[0;31m'
@@ -505,34 +504,44 @@ configure_qwen_mcp() {
         return 0
     fi
 
-    # Disable telemetry in Qwen Code global settings
+    # Configure Qwen Code global settings (telemetry + context window)
     local qwen_settings_dir="$HOME/.qwen"
     local qwen_settings_file="$qwen_settings_dir/settings.json"
-    if [[ ! -f "$qwen_settings_file" ]]; then
-        mkdir -p "$qwen_settings_dir"
-        cat > "$qwen_settings_file" <<'SETTINGS'
-{
-  "telemetry": {
-    "enabled": false
-  }
-}
-SETTINGS
-        log "Disabled Qwen Code telemetry in $qwen_settings_file"
-    elif ! grep -q '"telemetry"' "$qwen_settings_file" 2>/dev/null; then
-        # Settings file exists but no telemetry config - add it
-        # Use a temp file to merge (simple approach: if it's a valid JSON object, prepend the key)
-        local tmp_settings
-        tmp_settings=$(python3 -c "
-import json, sys
-with open('$qwen_settings_file') as f:
-    d = json.load(f)
+
+    # Context window matches --ctx-size 120000 in llama-server
+    local ctx_size=120000
+
+    local tmp_settings
+    tmp_settings=$(python3 -c "
+import json, sys, os
+
+settings_file = '$qwen_settings_file'
+ctx_size = $ctx_size
+
+# Load existing or start fresh
+if os.path.exists(settings_file):
+    with open(settings_file) as f:
+        d = json.load(f)
+else:
+    d = {}
+
+# Disable telemetry
 d.setdefault('telemetry', {})['enabled'] = False
+
+# Set context window size so Qwen Code knows the limit
+# This triggers built-in chat compression when approaching limits
+d.setdefault('model', {}).setdefault('generationConfig', {})['contextWindowSize'] = ctx_size
+
+# Set compression threshold to 70% (default) - compress before hitting limit
+d['model'].setdefault('chatCompression', {})['contextPercentageThreshold'] = 0.7
+
 json.dump(d, sys.stdout, indent=2)
 " 2>/dev/null)
-        if [[ -n "$tmp_settings" ]]; then
-            echo "$tmp_settings" > "$qwen_settings_file"
-            log "Disabled Qwen Code telemetry in $qwen_settings_file"
-        fi
+
+    if [[ -n "$tmp_settings" ]]; then
+        mkdir -p "$qwen_settings_dir"
+        echo "$tmp_settings" > "$qwen_settings_file"
+        log "Configured Qwen Code: telemetry=off, contextWindowSize=$ctx_size"
     fi
 
     # Check if MCP server is already configured
@@ -578,9 +587,6 @@ json.dump(d, sys.stdout, indent=2)
 
 stop_all() {
     header "Stopping All Services"
-
-    # Stop context proxy
-    pkill -f "context-proxy.py" 2>/dev/null || true
 
     # Stop any running tunnels
     stop_tunnels
@@ -1165,29 +1171,8 @@ launch_qwen() {
         upstream="http://localhost:$CODE_PORT"
     fi
 
-    # Start context proxy (truncates oversized tool results to fit context window)
-    pkill -f "context-proxy.py" 2>/dev/null || true
-    sleep 0.2
-    log "Starting context proxy on port $PROXY_PORT -> $upstream"
-    python3 "$TOOL_DIR/context-proxy.py" "$PROXY_PORT" "$upstream" &
-    local proxy_pid=$!
-    trap "kill $proxy_pid 2>/dev/null; wait $proxy_pid 2>/dev/null" EXIT INT TERM
-
-    # Wait for proxy to be ready (forwards /health to upstream)
-    local proxy_ready=false
-    for i in $(seq 1 10); do
-        if curl -sf "http://localhost:$PROXY_PORT/health" &>/dev/null; then
-            proxy_ready=true
-            break
-        fi
-        sleep 0.5
-    done
-    if ! $proxy_ready; then
-        warn "Context proxy may not be ready, continuing anyway"
-    fi
-
-    # Point Qwen Code at the proxy
-    export OPENAI_BASE_URL="http://localhost:$PROXY_PORT/v1"
+    # Point Qwen Code directly at the LLM server
+    export OPENAI_BASE_URL="$upstream/v1"
 
     # When using tunnel key, set it as OPENAI_API_KEY so the SDK sends
     # Authorization: Bearer <key> which Caddy accepts as tunnel auth
