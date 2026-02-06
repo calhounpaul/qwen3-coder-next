@@ -115,8 +115,14 @@ For remote services, MLServiceManager:
 ./local-cc.sh --tmp-serve-api public  # Individual Cloudflare tunnels per service
 ./local-cc.sh --tmp-serve-api lan     # Show LAN IP addresses for API access
 ./local-cc.sh --stop                  # Stop all services
+./local-cc.sh --stop-tunnels          # Stop only tunnels (keeps services running)
 ./local-cc.sh --status                # Check service status
 ./local-cc.sh --install               # Install as 'local-cc' command (run from anywhere)
+
+# Restart services while keeping tunnel alive (no new credentials needed)
+docker restart qwen3-server           # Restart Code LLM only
+docker restart automation-vlm         # Restart VLM only
+docker restart automation-browser     # Restart browser only
 
 # Remote: connect via single gateway tunnel
 ./local-cc.sh --remote-tunnel URL --tunnel-key SECRET --vlm
