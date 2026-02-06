@@ -21,6 +21,19 @@ Unified local LLM inference environment with browser automation MCP integration 
 
 After `--install`, run `local-cc` from any project directory. The tools (models, browser automation) are found automatically, while Qwen Code operates in your current directory.
 
+## Docker Compose
+
+The repo includes a `docker-compose.yml` for the full stack:
+
+```bash
+docker compose up -d                    # Core (Code LLM + browser)
+docker compose --profile vlm up -d      # + VLM
+docker compose --profile ml up -d       # + OmniParser + GUI-Actor
+docker compose --profile all up -d      # Everything
+```
+
+The MCP submodule (`mcp-browser-co-gnome/`) has its own standalone docker-compose for use with Claude Code or other AI assistants without the Code LLM.
+
 ## Architecture
 
 ```
@@ -55,7 +68,7 @@ Models are automatically downloaded on first run:
 Once running, Qwen Code has access to browser automation:
 
 - **Core** (always available): `docker_start`, `docker_stop`, `docker_status`, `browser_start`, `browser_goto`, `browser_click`, `browser_fill`, `browser_screenshot`, `browser_get_text`, `browser_evaluate`
-- **VLM** (`--vlm`): `vlm_chat` - vision model for image analysis
+- **VLM** (`--vlm`): `vlm_chat` - vision model for image analysis (auto-retries on transient errors)
 - **ML** (`--ml`): `omniparser_analyze`, `omniparser_click`, `omniparser_list_elements`, `natural_language_click`
 
 ## ML Service Management
@@ -118,7 +131,9 @@ When using `--remote-tunnel`, all `REMOTE_*_URL` vars are auto-derived from the 
 
 **Security**: Using HTTP with non-local domains will trigger a security warning. Use HTTPS or add `--insecure-ok` to skip the warning.
 
-**Privacy note**: Cloudflare quick tunnels terminate TLS at Cloudflare's edge, meaning Cloudflare can inspect traffic in transit. The shared secret provides authentication (preventing unauthorized access) but not end-to-end encryption from Cloudflare. For sensitive workloads, use a VPN (e.g., Tailscale) or SSH tunneling instead.
+**E2E Encryption**: When using `--remote-tunnel` with `--tunnel-key`, a chisel tunnel (SSH-over-HTTP) is automatically established, providing end-to-end encryption that Cloudflare cannot inspect. All service traffic is routed through this encrypted tunnel.
+
+**Privacy note**: Without `--tunnel-key`, Cloudflare quick tunnels terminate TLS at Cloudflare's edge, meaning Cloudflare can inspect traffic in transit. The shared secret provides authentication but not end-to-end encryption. For sensitive workloads without chisel, use a VPN (e.g., Tailscale) instead.
 
 ## Deployment Modes
 

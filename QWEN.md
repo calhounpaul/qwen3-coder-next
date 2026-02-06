@@ -81,7 +81,8 @@ For remote services, MLServiceManager:
 | `mcp-browser-co-gnome/src/novnc_automation/ml_services.py` | MLServiceManager implementation |
 | `mcp-browser-co-gnome/src/novnc_automation/browser.py` | Browser automation core |
 | `mcp-browser-co-gnome/src/novnc_automation/mcp_server.py` | MCP server exposing browser tools |
-| `mcp-browser-co-gnome/docker-compose.yml` | Docker service definitions |
+| `docker-compose.yml` | Full stack Docker services (Code LLM + MCP components) |
+| `mcp-browser-co-gnome/docker-compose.yml` | Standalone MCP services (for Claude Code, etc.) |
 
 ## Quick Start
 
@@ -124,13 +125,34 @@ Qwen Code telemetry is automatically disabled during installation (writes `~/.qw
 ```
 .
 ├── local-cc.sh             # Unified launcher script
+├── docker-compose.yml      # Full stack (Code LLM + all MCP components)
 ├── Dockerfile.llama-server # Builds llama-server with CUDA (clones llama.cpp)
 ├── models/                 # GGUF model files (auto-downloaded, gitignored)
 │   └── Qwen3-Coder-Next-GGUF/
-├── mcp-browser-co-gnome/   # Browser automation MCP server
+├── mcp-browser-co-gnome/   # Browser automation MCP server (submodule)
+│   ├── docker-compose.yml  # Standalone MCP services (for Claude Code, etc.)
 │   ├── docker/vlm/         # VLM Docker setup (model auto-downloads)
-│   └── tmp/                    # Ephemeral data (gitignored)
+│   └── tmp/                # Ephemeral data (gitignored)
 └── .qwen/                  # Local Qwen Code settings
+```
+
+## Docker Compose Files
+
+**Main repo** (`docker-compose.yml`): Full stack with Code LLM + all MCP components
+```bash
+docker compose up -d                    # Core (Code LLM + browser)
+docker compose --profile vlm up -d      # + VLM
+docker compose --profile ml up -d       # + OmniParser + GUI-Actor
+docker compose --profile all up -d      # Everything
+```
+
+**MCP submodule** (`mcp-browser-co-gnome/docker-compose.yml`): Standalone MCP services
+```bash
+cd mcp-browser-co-gnome
+docker compose up -d                    # Core (browser + video)
+docker compose --profile vlm up -d      # + VLM
+docker compose --profile ml up -d       # + ML services
+# Then: claude mcp add browser-automation novnc-mcp
 ```
 
 ## Services
@@ -216,7 +238,9 @@ TUNNEL_URL.trycloudflare.com -> Caddy:8888  /omniparser/*  -> localhost:8010
 
 On the client side, `--remote-tunnel URL --tunnel-key SECRET` auto-derives all `REMOTE_*_URL` vars and exports `TUNNEL_KEY` for the MCP server.
 
-**Privacy note**: Cloudflare quick tunnels terminate TLS at Cloudflare's edge, meaning Cloudflare can inspect traffic in transit. The shared secret provides authentication but not end-to-end encryption from Cloudflare. For sensitive workloads, use a VPN (e.g., Tailscale) or SSH tunneling instead.
+**E2E Encryption**: When using `--remote-tunnel` with `--tunnel-key`, a chisel tunnel (SSH-over-HTTP) is automatically established. All service traffic is end-to-end encrypted through the chisel tunnel, preventing Cloudflare from inspecting data.
+
+**Privacy note**: Without chisel (e.g., direct tunnel access), Cloudflare quick tunnels terminate TLS at Cloudflare's edge, meaning Cloudflare can inspect traffic in transit. The shared secret provides authentication but not end-to-end encryption. For sensitive workloads without chisel, use a VPN (e.g., Tailscale) instead.
 
 ## MCP Browser Tools
 
@@ -228,6 +252,7 @@ The `novnc-mcp` server exposes browser automation to Qwen Code:
 
 **VLM tool (with --vlm flag):**
 - `vlm_chat` - Chat with vision model, supports images in conversation
+  - Auto-retries on transient 500 errors (3 retries with exponential backoff)
 
 > **Image Analysis**: Use `vlm_chat` instead of the Read tool for images. The Read tool is denied for image files (*.jpg, *.png, etc.) - use the VLM for image understanding, face detection, UI analysis, etc.
 >
