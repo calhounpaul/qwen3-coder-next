@@ -642,9 +642,14 @@ serve_apis_lan() {
         printf "  %-12s -> http://%s:%s\n" "gui-actor" "$lan_ip" "$GUI_ACTOR_PORT"
     fi
 
+    if check_container_running "$BROWSER_CONTAINER"; then
+        printf "  %-12s -> http://%s:%s\n" "cdp" "$lan_ip" "$CDP_PORT"
+        echo "                  Playwright/CDP endpoint"
+    fi
+
     echo ""
     echo "  NOTE: Ensure firewall allows access to these ports."
-    echo "  For Ubuntu: sudo ufw allow 8003,6080,8004,8010,8001/tcp"
+    echo "  For Ubuntu: sudo ufw allow 8003,6080,8004,8010,8001,9222/tcp"
     echo "=========================================="
     echo ""
 
@@ -657,6 +662,7 @@ serve_apis_lan() {
     echo "VLM=http://${lan_ip}:${VLM_PORT}" >> "$url_file"
     echo "OMNIPARSER=http://${lan_ip}:${OMNIPARSER_PORT}" >> "$url_file"
     echo "GUI_ACTOR=http://${lan_ip}:${GUI_ACTOR_PORT}" >> "$url_file"
+    echo "CDP=http://${lan_ip}:${CDP_PORT}" >> "$url_file"
     log "LAN URLs saved to $url_file"
 }
 
@@ -712,6 +718,12 @@ serve_apis() {
         tunnel_urls["gui-actor"]=$(start_tunnel "gui-actor" "$GUI_ACTOR_PORT")
     fi
 
+    # Tunnel CDP (Playwright) if browser is running
+    if check_container_running "$BROWSER_CONTAINER"; then
+        log "Creating tunnel for CDP/Playwright (port $CDP_PORT)..."
+        tunnel_urls["cdp"]=$(start_tunnel "cdp" "$CDP_PORT")
+    fi
+
     # Display tunnel URLs
     echo ""
     echo "=========================================="
@@ -728,6 +740,7 @@ serve_apis() {
             vlm) port="$VLM_PORT" ;;
             omniparser) port="$OMNIPARSER_PORT" ;;
             gui-actor) port="$GUI_ACTOR_PORT" ;;
+            cdp) port="$CDP_PORT" ;;
         esac
         printf "  %-12s (:%s) -> %s\n" "$service" "$port" "$url"
     done
