@@ -5,15 +5,16 @@ Unified local LLM inference environment with browser automation MCP integration 
 ## Quick Start
 
 ```bash
-./local-cc.sh                        # Start Code LLM + browser, launch Qwen Code
-./local-cc.sh --vlm                  # Include VLM for image analysis
-./local-cc.sh --ml                   # Include ML services (OmniParser, GUI-Actor)
-./local-cc.sh --vlm --ml             # All services
-./local-cc.sh --tmp-serve-api public # Expose APIs via Cloudflare tunnels
-./local-cc.sh --tmp-serve-api lan    # Show LAN access URLs
-./local-cc.sh --stop                 # Stop all services
-./local-cc.sh --status               # Check service status
-./local-cc.sh --install              # Install as 'local-cc' command (run from anywhere)
+./local-cc.sh                         # Start Code LLM + browser, launch Qwen Code
+./local-cc.sh --vlm                   # Include VLM for image analysis
+./local-cc.sh --ml                    # Include ML services (OmniParser, GUI-Actor)
+./local-cc.sh --vlm --ml              # All services
+./local-cc.sh --tmp-serve-api single  # Expose all APIs via single gateway tunnel (recommended)
+./local-cc.sh --tmp-serve-api public  # Individual Cloudflare tunnels per service
+./local-cc.sh --tmp-serve-api lan     # Show LAN access URLs
+./local-cc.sh --stop                  # Stop all services
+./local-cc.sh --status                # Check service status
+./local-cc.sh --install               # Install as 'local-cc' command (run from anywhere)
 ```
 
 After `--install`, run `local-cc` from any project directory. The tools (models, browser automation) are found automatically, while Qwen Code operates in your current directory.
@@ -32,7 +33,7 @@ Qwen Code ──stdio──> MCP Server (novnc-mcp) ──CDP──> Browser (Do
 
 | Service | Port | Description | Flag |
 |---------|------|-------------|------|
-| Code LLM | 8003 | Qwen3-Coder-Next (120k context, Q3_K_S) | default |
+| Code LLM | 8003 | Qwen3-Coder-Next (120k context, auto-quant by GPU) | default |
 | noVNC | 6080 | Browser visualization (password: `secret`) | default |
 | VLM | 8004 | Qwen3-VL-4B vision-language model | `--vlm` |
 | OmniParser | 8010 | UI element detection | `--ml` |
@@ -44,7 +45,7 @@ View the browser at http://localhost:6080 (password: `secret`)
 
 Models are automatically downloaded on first run:
 
-- **Code LLM**: `unsloth/Qwen3-Coder-Next-GGUF` (auto-selected by VRAM: >=45GB Q3_K_S, >=32GB IQ4_XS, >=24GB IQ3_XXS, <24GB IQ2_XXS)
+- **Code LLM**: `unsloth/Qwen3-Coder-Next-GGUF` (auto-selected by GPU: A6000 -> Q3_K_S, 2x RTX 3090 -> IQ3_XXS, fallback by VRAM)
 - **VLM**: `unsloth/Qwen3-VL-4B-Instruct-GGUF` (~3GB, downloads to `mcp-browser-co-gnome/tmp/vlm-models/`)
 
 ## MCP Browser Tools
@@ -68,35 +69,41 @@ ML services use **on-demand startup** with mutual exclusion:
 
 ### Sharing Your APIs (Server Mode)
 
-Share your local APIs with others using temporary Cloudflare tunnels or LAN access:
+Share all local APIs through a single authenticated gateway tunnel:
 
 ```bash
-# Public access via Cloudflare (temporary URLs)
+# Single gateway tunnel (recommended) - one URL for all services
+./local-cc.sh --tmp-serve-api single
+# Output: URL + secret, services at /code-llm/, /vlm/, /omniparser/, etc.
+
+# Individual tunnels per service (legacy)
 ./local-cc.sh --tmp-serve-api public
-./local-cc.sh --show-tunnels   # Show active tunnel URLs
-./local-cc.sh --stop-tunnels   # Close all tunnels
 
 # LAN access (show local IP addresses)
 ./local-cc.sh --tmp-serve-api lan
+
+# Management
+./local-cc.sh --show-tunnels   # Show active tunnel URLs
+./local-cc.sh --stop-tunnels   # Close all tunnels and gateway
 ```
 
-Tunnels are temporary and expire when stopped. Each running service gets its own tunnel URL.
+The single gateway uses Caddy reverse proxy on port 8888 with a shared secret. API paths use `X-Tunnel-Key` or `Authorization: Bearer` header auth. The noVNC root path uses browser-friendly basic auth (user: `tunnel`, password: the secret).
 
 ### Using Remote APIs (Client Mode)
 
-Connect to remote servers instead of starting local services:
+Connect to a remote gateway tunnel with a single URL:
 
 ```bash
-# Use a remote Code LLM via Cloudflare tunnel
-./local-cc.sh --remote-code https://xxx.trycloudflare.com
+# Connect via single gateway tunnel (recommended)
+./local-cc.sh --remote-tunnel https://xxx.trycloudflare.com --tunnel-key SECRET
 
-# Use a remote server on your LAN
+# Or connect to individual services
+./local-cc.sh --remote-code https://xxx.trycloudflare.com
 ./local-cc.sh --remote-code 192.168.1.10:8003
 
-# Use multiple remote services
-./local-cc.sh --remote-code https://llm.example.com --remote-vlm https://vlm.example.com
-
 # All remote options:
+#   --remote-tunnel URL      Single gateway tunnel (auto-derives all URLs below)
+#   --tunnel-key SECRET      Shared secret for gateway authentication
 #   --remote-code URL        Remote Code LLM
 #   --remote-vlm URL         Remote VLM server
 #   --remote-novnc URL       Remote browser (noVNC viewer)
@@ -105,7 +112,7 @@ Connect to remote servers instead of starting local services:
 #   --remote-gui-actor URL   Remote GUI-Actor
 ```
 
-When using `--remote-*` flags, the corresponding local Docker service is skipped. The MCP server reads remote URLs from environment variables (`VLM_URL`, `OMNIPARSER_URL`, `GUI_ACTOR_URL`, `CDP_ENDPOINT`) which are automatically set by `local-cc.sh`.
+When using `--remote-tunnel`, all `REMOTE_*_URL` vars are auto-derived from the gateway URL. The `TUNNEL_KEY` is exported for the MCP server (adds `X-Tunnel-Key` header to httpx requests) and set as `OPENAI_API_KEY` (so the OpenAI SDK sends `Authorization: Bearer` for LLM auth).
 
 **Security**: Using HTTP with non-local domains will trigger a security warning. Use HTTPS or add `--insecure-ok` to skip the warning.
 

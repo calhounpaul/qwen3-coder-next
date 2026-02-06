@@ -13,7 +13,7 @@ See [README.md](./README.md) for end-user documentation.
 - **NEVER use `huggingface-cli`** - Always use `hf` command instead for all HuggingFace operations (download, upload, etc.)
 - **Image Analysis**: Do not use the Read tool for images (`.png`, `.jpg`, etc.). Use `vlm_chat` for image understanding instead.
 - **ML Service Management**: ML services (OmniParser, GUI-Actor, VLM) use **MLServiceManager** for on-demand startup with mutual exclusion - only one ML service runs at a time (see `mcp-browser-co-gnome/src/novnc_automation/ml_services.py`)
-- **GPU Memory**: Code LLM runs on a single 48GB A6000 GPU using Q3_K_S quantization (34.6GB model + KV cache).
+- **GPU Memory**: Model quantization is auto-selected by GPU name (A6000 -> Q3_K_S, 2x RTX 3090 -> IQ3_XXS, fallback by VRAM).
 
 ## Architecture
 
@@ -21,7 +21,7 @@ See [README.md](./README.md) for end-user documentation.
 
 | Service | Port | Description |
 |---------|------|-------------|
-| Code LLM | 8003 | Qwen3-Coder-Next (120k ctx, Q3_K_S) |
+| Code LLM | 8003 | Qwen3-Coder-Next (120k ctx, auto-quant by GPU) |
 | noVNC | 6080 | Browser visualization (password: `secret`) |
 | CDP | 9222 | Chrome DevTools Protocol |
 | VLM | 8004 | Qwen3-VL-4B (vision-language model) |
@@ -51,8 +51,11 @@ The MCP server supports connecting to remote services via environment variables.
 | `OMNIPARSER_URL` | `http://localhost:8010` | `mcp_server.py`, `ml_services.py` |
 | `GUI_ACTOR_URL` | `http://localhost:8001` | `mcp_server.py`, `ml_services.py` |
 | `CDP_ENDPOINT` | (empty = auto-detect Docker) | `mcp_server.py` |
+| `TUNNEL_KEY` | (auto-generated if empty) | `mcp_server.py`, `ml_services.py` |
 
-These are set automatically by `local-cc.sh` when `--remote-*` flags are used. The MCP server subprocess inherits them via `exec qwen`.
+These are set automatically by `local-cc.sh` when `--remote-*` or `--tunnel-key` flags are used. The MCP server subprocess inherits them via `exec qwen`.
+
+When `TUNNEL_KEY` is set, all httpx requests include an `X-Tunnel-Key` header for authentication through the Caddy gateway. If not set, a random key is auto-generated on MCP server startup and logged to stderr.
 
 For remote services, MLServiceManager:
 - Skips Docker compose start/stop
@@ -74,6 +77,7 @@ For remote services, MLServiceManager:
 |------|---------|
 | `local-cc.sh` | Main launcher script |
 | `Dockerfile.llama-server` | Code LLM Docker image (clones llama.cpp) |
+| `mcp-browser-co-gnome/Caddyfile.gateway` | Caddy reverse proxy config for single gateway tunnel |
 | `mcp-browser-co-gnome/src/novnc_automation/ml_services.py` | MLServiceManager implementation |
 | `mcp-browser-co-gnome/src/novnc_automation/browser.py` | Browser automation core |
 | `mcp-browser-co-gnome/src/novnc_automation/mcp_server.py` | MCP server exposing browser tools |
@@ -82,17 +86,21 @@ For remote services, MLServiceManager:
 ## Quick Start
 
 ```bash
-./local-cc.sh                        # Start Code LLM + browser and launch Qwen Code
-./local-cc.sh --vlm                  # Include VLM for image analysis (vlm_chat tool)
-./local-cc.sh --ml                   # Include ML services (OmniParser, GUI-Actor)
-./local-cc.sh --vlm --ml             # Include all services
-./local-cc.sh --tmp-serve-api public # Expose APIs via Cloudflare tunnels
-./local-cc.sh --tmp-serve-api lan    # Show LAN IP addresses for API access
-./local-cc.sh --stop                 # Stop all services
-./local-cc.sh --status               # Check service status
-./local-cc.sh --install              # Install as 'local-cc' command (run from anywhere)
+./local-cc.sh                         # Start Code LLM + browser and launch Qwen Code
+./local-cc.sh --vlm                   # Include VLM for image analysis (vlm_chat tool)
+./local-cc.sh --ml                    # Include ML services (OmniParser, GUI-Actor)
+./local-cc.sh --vlm --ml              # Include all services
+./local-cc.sh --tmp-serve-api single  # Single gateway tunnel for all services (recommended)
+./local-cc.sh --tmp-serve-api public  # Individual Cloudflare tunnels per service
+./local-cc.sh --tmp-serve-api lan     # Show LAN IP addresses for API access
+./local-cc.sh --stop                  # Stop all services
+./local-cc.sh --status                # Check service status
+./local-cc.sh --install               # Install as 'local-cc' command (run from anywhere)
 
-# Remote: use services running on another machine
+# Remote: connect via single gateway tunnel
+./local-cc.sh --remote-tunnel URL --tunnel-key SECRET --vlm
+
+# Remote: connect to individual services
 ./local-cc.sh --remote-code URL --remote-vlm URL --remote-novnc URL --remote-cdp URL --vlm
 ```
 
@@ -114,7 +122,7 @@ For remote services, MLServiceManager:
 
 | Service | Port | Description | Flag |
 |---------|------|-------------|------|
-| Code LLM | 8003 | Qwen3-Coder-Next (120k ctx, VRAM-auto quant) | default |
+| Code LLM | 8003 | Qwen3-Coder-Next (120k ctx, auto-quant by GPU) | default |
 | noVNC | 6080 | Browser visualization (password: `secret`) | default |
 | CDP | 9222 | Chrome DevTools Protocol | default |
 | VLM | 8004 | Qwen3-VL-4B (vision-language model) | `--vlm` |
@@ -123,16 +131,20 @@ For remote services, MLServiceManager:
 
 ## Models
 
-**Code LLM** (auto-selected based on VRAM):
+**Code LLM** (auto-selected based on GPU name):
 - `unsloth/Qwen3-Coder-Next-GGUF`
-- ≥48GB: Q3_K_S (34.6GB) | ≥32GB: IQ4_XS | ≥24GB: IQ3_XXS | <24GB: IQ2_XXS
+- A6000 (48GB): Q3_K_S (34.6GB) | 2x RTX 3090: IQ3_XXS | 1x RTX 3090: IQ3_XXS
+- Unknown GPU fallback by VRAM: ≥45GB Q3_K_S | ≥32GB IQ4_XS | ≥24GB IQ3_XXS | <24GB IQ2_XXS
 
 **VLM** (Docker-managed, auto-downloads on first `--vlm` run):
 - `unsloth/Qwen3-VL-4B-Instruct-GGUF` (Q8_0 + mmproj)
 - Stored in `mcp-browser-co-gnome/tmp/vlm-models/` (gitignored)
 
-## GPU Allocation (1x A6000 48GB)
+## GPU Allocation
 
+GPU allocation depends on hardware:
+
+**A6000 (48GB single GPU):**
 | Service | VRAM Usage | Notes |
 |---------|------------|-------|
 | Code LLM | ~35-40GB | Q3_K_S (34.6GB) + KV cache for 120k context |
@@ -140,7 +152,13 @@ For remote services, MLServiceManager:
 | OmniParser | ~4GB | On-demand, mutual exclusion with other ML services |
 | GUI-Actor | ~4GB | On-demand, mutual exclusion with other ML services |
 
-**Note**: With a single GPU, ML services (VLM, OmniParser, GUI-Actor) share GPU memory with the Code LLM. The MLServiceManager handles mutual exclusion to prevent OOM.
+**2x RTX 3090 (24GB each):**
+| Service | VRAM Usage | Notes |
+|---------|------------|-------|
+| Code LLM | ~20GB GPU 0 + ~12GB GPU 1 | IQ3_XXS with `--tensor-split 1.0,0.5` |
+| VLM / OmniParser / GUI-Actor | ~4-5GB GPU 1 | On-demand, one at a time |
+
+ML services use MLServiceManager for mutual exclusion to prevent OOM.
 
 ## ML Service Management
 
@@ -162,6 +180,26 @@ Environment variables:
 4. Tracks usage time for idle shutdown
 
 Implementation: `mcp-browser-co-gnome/src/novnc_automation/ml_services.py`
+
+## Single Gateway Tunnel
+
+The `--tmp-serve-api single` mode starts a Caddy reverse proxy (port 8888) + one cloudflared tunnel to expose all services through a single URL with path-based routing:
+
+```
+                                          /code-llm/*    -> localhost:8003
+                                          /vlm/*         -> localhost:8004
+TUNNEL_URL.trycloudflare.com -> Caddy:8888  /omniparser/*  -> localhost:8010
+       (shared secret auth)               /gui-actor/*   -> localhost:8001
+                                          /cdp/*         -> localhost:9222
+                                          /*             -> localhost:6080 (noVNC)
+```
+
+- **API paths**: Authenticated via `X-Tunnel-Key` header or `Authorization: Bearer` token
+- **noVNC root**: Authenticated via HTTP basic auth (user: `tunnel`, password: the secret)
+- **Secret**: Auto-generated 32-char hex via `openssl rand -hex 16`
+- **Config**: `mcp-browser-co-gnome/Caddyfile.gateway`
+
+On the client side, `--remote-tunnel URL --tunnel-key SECRET` auto-derives all `REMOTE_*_URL` vars and exports `TUNNEL_KEY` for the MCP server.
 
 ## MCP Browser Tools
 
