@@ -305,7 +305,9 @@ The `novnc-mcp` server exposes browser automation to Qwen Code:
 
 **VLM tool (with --vlm flag):**
 - `vlm_chat` - Chat with vision model, supports images in conversation
-  - Auto-retries on transient 500 errors (3 retries with exponential backoff)
+  - Auto-retries on 5xx errors: 5 retries with delays (5s, 10s, 15s, 20s, 30s)
+  - Retry progress logged to stderr so user sees "waiting Xs before retry..."
+  - 180s request timeout for large image processing
 
 > **Image Analysis**: Use `vlm_chat` instead of the Read tool for images. The Read tool is denied for image files (*.jpg, *.png, etc.) - use the VLM for image understanding, face detection, UI analysis, etc.
 >
@@ -335,6 +337,39 @@ Use OmniParser for UI element detection and clicking:
 **For natural language clicks** (GUI-Actor):
 - Use `natural_language_click(instruction="click the search button")`
 - Works without OmniParser, but requires GUI-Actor container
+
+## Troubleshooting
+
+### VLM "failed to find memory slot" errors
+
+This error occurs when the VLM runs out of KV cache memory for image processing:
+
+```
+decode: failed to find a memory slot for batch of size 2048
+```
+
+**Causes:**
+1. Multiple parallel slots consuming shared memory (should be `--n-parallel 1`)
+2. Large high-resolution images requiring 4000+ tokens
+3. Previous request's memory not freed before next request
+
+**Fix:** Rebuild the VLM container to pick up the latest entrypoint settings:
+```bash
+cd mcp-browser-co-gnome
+git pull origin main
+docker compose --profile vlm build vlm --no-cache
+docker stop automation-vlm && docker rm automation-vlm
+docker compose --profile vlm up -d vlm
+```
+
+Verify fix by checking logs - should show `n_parallel = 1`:
+```bash
+docker logs automation-vlm 2>&1 | grep n_parallel
+```
+
+### VLM outputs garbage (question marks)
+
+Usually caused by missing `--jinja` flag for chat template handling. Rebuild VLM container with `--no-cache`.
 
 ## Docker Images
 
