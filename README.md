@@ -48,7 +48,7 @@ Qwen Code ──stdio──> MCP Server (novnc-mcp) ──CDP──> Browser (Do
 
 | Service | Port | Description | Flag |
 |---------|------|-------------|------|
-| Code LLM | 8003 | Qwen3-Coder-Next (120k context, auto-quant by GPU) | default |
+| Code LLM | 8003 | Qwen3-Coder-Next 80B MoE (120k context, GGUF auto-quant) | default |
 | noVNC | 6080 | Browser visualization (password: `secret`) | default |
 | VLM | 8004 | Qwen3-VL-4B vision-language model | `--vlm` |
 | OmniParser | 8010 | UI element detection | `--ml` |
@@ -60,8 +60,12 @@ View the browser at http://localhost:6080 (password: `secret`)
 
 Models are automatically downloaded on first run:
 
-- **Code LLM**: `unsloth/Qwen3-Coder-Next-GGUF` (auto-selected by GPU: A6000 -> Q3_K_S, 2x RTX 3090 -> IQ3_XXS, fallback by VRAM)
-- **VLM**: `unsloth/Qwen3-VL-4B-Instruct-GGUF` (~3GB, downloads to `mcp-browser-co-gnome/tmp/vlm-models/`)
+- **Code LLM**: `unsloth/Qwen3-Coder-Next-GGUF` - Qwen3-Coder-Next 80B MoE (80B total params, 3B active per token)
+  - Auto-selected quantization by GPU: A6000 (48GB) → Q3_K_S (33GB), 2x RTX 3090 → IQ3_XXS
+  - GGUF format via llama.cpp, 120k context window
+- **VLM**: `unsloth/Qwen3-VL-4B-Instruct-GGUF` - Qwen3-VL-4B vision-language model
+  - Q8_0 quantization (~3GB), 16k context for image processing
+  - Downloads to `mcp-browser-co-gnome/tmp/vlm-models/`
 
 ## MCP Browser Tools
 

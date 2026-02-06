@@ -177,7 +177,7 @@ docker compose --profile ml up -d       # + ML services
 
 | Service | Port | Description | Flag |
 |---------|------|-------------|------|
-| Code LLM | 8003 | Qwen3-Coder-Next (120k ctx, auto-quant by GPU) | default |
+| Code LLM | 8003 | Qwen3-Coder-Next 80B MoE (120k ctx, GGUF auto-quant) | default |
 | noVNC | 6080 | Browser visualization (password: `secret`) | default |
 | CDP | 9222 | Chrome DevTools Protocol | default |
 | VLM | 8004 | Qwen3-VL-4B (vision-language model) | `--vlm` |
@@ -186,13 +186,19 @@ docker compose --profile ml up -d       # + ML services
 
 ## Models
 
-**Code LLM** (auto-selected based on GPU name):
-- `unsloth/Qwen3-Coder-Next-GGUF`
-- A6000 (48GB): Q3_K_S (34.6GB) | 2x RTX 3090: IQ3_XXS | 1x RTX 3090: IQ3_XXS
-- Unknown GPU fallback by VRAM: ≥45GB Q3_K_S | ≥32GB IQ4_XS | ≥24GB IQ3_XXS | <24GB IQ2_XXS
+**Code LLM**: Qwen3-Coder-Next 80B MoE (80B total parameters, 3B active per token)
+- Repo: `unsloth/Qwen3-Coder-Next-GGUF`
+- Format: GGUF via llama.cpp with CUDA
+- Auto-selected quantization by GPU:
+  - A6000 (48GB): Q3_K_S (33GB) - leaves ~10GB for KV cache + VLM
+  - 2x RTX 3090: IQ3_XXS
+  - Fallback by VRAM: ≥45GB → Q3_K_S | ≥32GB → IQ4_XS | ≥24GB → IQ3_XXS | <24GB → IQ2_XXS
+- Note: FP8 (~76GB) requires H100; GGUF quantization enables A6000/consumer GPUs
 
-**VLM** (Docker-managed, auto-downloads on first `--vlm` run):
-- `unsloth/Qwen3-VL-4B-Instruct-GGUF` (Q8_0 + mmproj)
+**VLM**: Qwen3-VL-4B vision-language model
+- Repo: `unsloth/Qwen3-VL-4B-Instruct-GGUF` (Q8_0 + mmproj-F16)
+- Context: 16k tokens (for high-resolution image processing)
+- VRAM: ~5GB
 - Stored in `mcp-browser-co-gnome/tmp/vlm-models/` (gitignored)
 
 ## GPU Allocation
@@ -202,7 +208,7 @@ GPU allocation depends on hardware:
 **A6000 (48GB single GPU):**
 | Service | VRAM Usage | Notes |
 |---------|------------|-------|
-| Code LLM | ~35-40GB | Q3_K_S (34.6GB) + KV cache for 120k context |
+| Code LLM | ~36-42GB | Q3_K_S (33GB) + KV cache for 120k context |
 | VLM | ~5GB | Runs when Code LLM not using full context |
 | OmniParser | ~4GB | On-demand, mutual exclusion with other ML services |
 | GUI-Actor | ~4GB | On-demand, mutual exclusion with other ML services |
