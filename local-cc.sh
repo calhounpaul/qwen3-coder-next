@@ -82,6 +82,7 @@ CDP_PORT=9222
 OMNIPARSER_PORT=8010
 GUI_ACTOR_PORT=8001
 CHISEL_PORT=8889
+PROXY_PORT=8013
 
 # Colors
 RED='\033[0;31m'
@@ -576,6 +577,9 @@ json.dump(d, sys.stdout, indent=2)
 
 stop_all() {
     header "Stopping All Services"
+
+    # Stop context proxy
+    pkill -f "context-proxy.py" 2>/dev/null || true
 
     # Stop any running tunnels
     stop_tunnels
@@ -1151,14 +1155,39 @@ launch_qwen() {
 
     header "Launching Qwen Code"
 
-    # Configure OpenAI-compatible endpoint
-    # Use remote URL if specified, otherwise local
+    # Determine upstream for Code LLM
+    local upstream
     if [[ -n "$REMOTE_CODE_URL" ]]; then
-        export OPENAI_BASE_URL="${REMOTE_CODE_URL}/v1"
+        upstream="$REMOTE_CODE_URL"
         log "Using remote Code LLM: $REMOTE_CODE_URL"
     else
-        export OPENAI_BASE_URL="http://localhost:$CODE_PORT/v1"
+        upstream="http://localhost:$CODE_PORT"
     fi
+
+    # Start context proxy (truncates oversized tool results to fit context window)
+    pkill -f "context-proxy.py" 2>/dev/null || true
+    sleep 0.2
+    log "Starting context proxy on port $PROXY_PORT -> $upstream"
+    python3 "$TOOL_DIR/context-proxy.py" "$PROXY_PORT" "$upstream" &
+    local proxy_pid=$!
+    trap "kill $proxy_pid 2>/dev/null; wait $proxy_pid 2>/dev/null" EXIT INT TERM
+
+    # Wait for proxy to be ready (forwards /health to upstream)
+    local proxy_ready=false
+    for i in $(seq 1 10); do
+        if curl -sf "http://localhost:$PROXY_PORT/health" &>/dev/null; then
+            proxy_ready=true
+            break
+        fi
+        sleep 0.5
+    done
+    if ! $proxy_ready; then
+        warn "Context proxy may not be ready, continuing anyway"
+    fi
+
+    # Point Qwen Code at the proxy
+    export OPENAI_BASE_URL="http://localhost:$PROXY_PORT/v1"
+
     # When using tunnel key, set it as OPENAI_API_KEY so the SDK sends
     # Authorization: Bearer <key> which Caddy accepts as tunnel auth
     if [[ -n "$TUNNEL_KEY" ]]; then
@@ -1211,8 +1240,8 @@ launch_qwen() {
     echo "=========================================="
     echo ""
 
-    # Launch Qwen Code
-    exec qwen "$@"
+    # Launch Qwen Code (no exec - trap needs to clean up proxy)
+    qwen "$@"
 }
 
 # =============================================================================
