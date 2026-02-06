@@ -15,6 +15,24 @@ See [README.md](./README.md) for end-user documentation.
 - **ML Service Management**: ML services (OmniParser, GUI-Actor, VLM) use **MLServiceManager** for on-demand startup with mutual exclusion - only one ML service runs at a time (see `mcp-browser-co-gnome/src/novnc_automation/ml_services.py`)
 - **GPU Memory**: Model quantization is auto-selected by GPU name (A6000 -> Q3_K_S, 2x RTX 3090 -> IQ3_XXS, fallback by VRAM).
 
+## Avoiding Tool Call Loops
+
+To prevent getting stuck in repetitive tool call loops:
+
+1. **Grep before Read** - When searching for specific code patterns in large files, use Grep first to find line numbers, then Read those specific lines. Don't read the same file range multiple times hoping for different results.
+
+2. **Read with offset** - For large files (>100 lines), read specific sections using offset/limit. If the first 40 lines don't have what you need, move to a different section - don't re-read the same lines.
+
+3. **One search strategy per attempt** - If a search doesn't find what you need, try a different pattern or approach. Don't repeat the same grep/read with identical parameters.
+
+4. **Track what you've seen** - Keep mental note of file sections you've already read. If you need to revisit, read a DIFFERENT section.
+
+Example - finding a function in a 1687-line file:
+```
+BAD:  Read lines 1-40, Read lines 1-40, Read lines 1-40 (loop!)
+GOOD: Grep for function name -> get line 847 -> Read lines 840-880
+```
+
 ## Architecture
 
 ### Services
