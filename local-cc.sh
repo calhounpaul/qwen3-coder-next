@@ -502,6 +502,36 @@ configure_qwen_mcp() {
         return 0
     fi
 
+    # Disable telemetry in Qwen Code global settings
+    local qwen_settings_dir="$HOME/.qwen"
+    local qwen_settings_file="$qwen_settings_dir/settings.json"
+    if [[ ! -f "$qwen_settings_file" ]]; then
+        mkdir -p "$qwen_settings_dir"
+        cat > "$qwen_settings_file" <<'SETTINGS'
+{
+  "telemetry": {
+    "enabled": false
+  }
+}
+SETTINGS
+        log "Disabled Qwen Code telemetry in $qwen_settings_file"
+    elif ! grep -q '"telemetry"' "$qwen_settings_file" 2>/dev/null; then
+        # Settings file exists but no telemetry config - add it
+        # Use a temp file to merge (simple approach: if it's a valid JSON object, prepend the key)
+        local tmp_settings
+        tmp_settings=$(python3 -c "
+import json, sys
+with open('$qwen_settings_file') as f:
+    d = json.load(f)
+d.setdefault('telemetry', {})['enabled'] = False
+json.dump(d, sys.stdout, indent=2)
+" 2>/dev/null)
+        if [[ -n "$tmp_settings" ]]; then
+            echo "$tmp_settings" > "$qwen_settings_file"
+            log "Disabled Qwen Code telemetry in $qwen_settings_file"
+        fi
+    fi
+
     # Check if MCP server is already configured
     if qwen mcp list 2>/dev/null | grep -q "$mcp_name"; then
         log "MCP server '$mcp_name' already configured"
@@ -1201,6 +1231,8 @@ main() {
     local include_ml=false
     local include_vlm=false
     local serve_api=""
+    local server_only=false
+    local client_only=false
     local remaining_args=()
     local pending_arg=""  # Track which arg is expecting a value
 
@@ -1293,6 +1325,12 @@ main() {
             --insecure-ok)
                 INSECURE_OK=true
                 ;;
+            --server-only)
+                server_only=true
+                ;;
+            --client-only)
+                client_only=true
+                ;;
             --ml)
                 include_ml=true
                 ;;
@@ -1302,6 +1340,11 @@ main() {
             --help|-h)
                 echo "Usage: $0 [OPTIONS] [-- QWEN_ARGS]"
                 echo ""
+                echo "Modes:"
+                echo "  (default)                Start local services + Qwen Code"
+                echo "  --server-only            Start local services only (no Qwen Code, for hosting)"
+                echo "  --client-only            Connect to remote services only (no Docker/GPU needed)"
+                echo ""
                 echo "Local Services:"
                 echo "  --vlm                    Include VLM for image analysis (vlm_chat tool)"
                 echo "  --ml                     Include ML services (OmniParser, GUI-Actor)"
@@ -1309,7 +1352,7 @@ main() {
                 echo "  --status                 Show status of all services"
                 echo "  --install                Install as 'local-cc' command"
                 echo ""
-                echo "Remote Servers:"
+                echo "Remote Servers (client mode):"
                 echo "  --remote-tunnel URL      Use single gateway tunnel (from --tmp-serve-api single)"
                 echo "  --tunnel-key SECRET      Shared secret for gateway authentication"
                 echo "  --remote-code URL        Use remote Code LLM (e.g., https://xxx.trycloudflare.com)"
@@ -1320,7 +1363,7 @@ main() {
                 echo "  --remote-cdp URL         Use remote CDP endpoint (browser automation)"
                 echo "  --insecure-ok            Skip HTTP security warnings"
                 echo ""
-                echo "Sharing (expose local APIs):"
+                echo "Sharing (server mode):"
                 echo "  --tmp-serve-api single   Single gateway tunnel for all services (recommended)"
                 echo "  --tmp-serve-api public   Individual Cloudflare tunnels per service"
                 echo "  --tmp-serve-api lan      Show LAN IP addresses for all running APIs"
@@ -1328,12 +1371,11 @@ main() {
                 echo "  --show-tunnels           Show active tunnel URLs"
                 echo ""
                 echo "Examples:"
-                echo "  $0                                    # Start local services"
+                echo "  $0                                    # Start everything locally"
                 echo "  $0 --vlm --ml                         # Start with all ML services"
-                echo "  $0 --tmp-serve-api single             # Share via single gateway tunnel"
-                echo "  $0 --tmp-serve-api public             # Share via individual tunnels"
-                echo "  $0 --remote-tunnel URL --tunnel-key SECRET  # Connect to gateway"
-                echo "  $0 --remote-code https://xxx.trycloudflare.com  # Use remote LLM"
+                echo "  $0 --server-only --tmp-serve-api single  # Host for remote clients"
+                echo "  $0 --client-only --remote-tunnel URL --tunnel-key SECRET  # Client only"
+                echo "  $0 --remote-tunnel URL --tunnel-key SECRET  # Connect + launch locally"
                 echo "  $0 --remote-code 192.168.1.10:8003    # Use LAN server"
                 echo "  $0 -- --resume                        # Pass --resume to Qwen Code"
                 exit 0
@@ -1348,6 +1390,11 @@ main() {
                 ;;
         esac
     done
+
+    # Validate mutually exclusive modes
+    if $server_only && $client_only; then
+        error "--server-only and --client-only cannot be used together"
+    fi
 
     # Auto-derive all remote URLs from single gateway tunnel
     if [[ -n "$REMOTE_TUNNEL_URL" ]]; then
@@ -1364,6 +1411,37 @@ main() {
     if [[ -n "$TUNNEL_KEY" ]]; then
         export TUNNEL_KEY="$TUNNEL_KEY"
     fi
+
+    # =========================================================================
+    # CLIENT-ONLY MODE: No Docker, no GPU, no local services
+    # Only installs MCP server + Qwen Code CLI and connects to remote services
+    # =========================================================================
+    if $client_only; then
+        if [[ -z "$REMOTE_CODE_URL" ]]; then
+            error "--client-only requires --remote-tunnel or --remote-code to be set"
+        fi
+
+        # Validate remote URLs for security
+        check_url_security "$REMOTE_CODE_URL" "Code LLM"
+        check_url_security "$REMOTE_VLM_URL" "VLM"
+        check_url_security "$REMOTE_NOVNC_URL" "noVNC"
+        check_url_security "$REMOTE_OMNIPARSER_URL" "OmniParser"
+        check_url_security "$REMOTE_GUI_ACTOR_URL" "GUI-Actor"
+        check_url_security "$REMOTE_CDP_URL" "CDP"
+
+        # Only need pip (for MCP server) and npm (for Qwen Code)
+        ensure_mcp_server
+        ensure_qwen_cli
+        configure_qwen_mcp
+
+        launch_qwen "$include_vlm" "${remaining_args[@]}"
+        return  # exec in launch_qwen doesn't return, but just in case
+    fi
+
+    # =========================================================================
+    # SERVER-ONLY MODE: Start local services + tunnels, no Qwen Code
+    # =========================================================================
+    # (also used as common path for default mode, with client steps added after)
 
     # Validate remote URLs for security
     check_url_security "$REMOTE_CODE_URL" "Code LLM"
@@ -1429,15 +1507,27 @@ main() {
         start_ml_services
     fi
 
-    # Setup MCP and Qwen Code CLI
-    ensure_mcp_server
-    ensure_qwen_cli
-    configure_qwen_mcp
-
     # Start API tunnels if requested
     if [[ -n "$serve_api" ]] && [[ "$serve_api" != "pending" ]]; then
         serve_apis "$serve_api"
     fi
+
+    # Server-only: services are running, print status and exit
+    if $server_only; then
+        header "Server Ready"
+        log "All services started. Use --stop to shut down."
+        if [[ -z "$serve_api" ]]; then
+            log "Tip: Add --tmp-serve-api single to expose services via tunnel"
+        fi
+        exit 0
+    fi
+
+    # =========================================================================
+    # DEFAULT MODE: Start services + Qwen Code
+    # =========================================================================
+    ensure_mcp_server
+    ensure_qwen_cli
+    configure_qwen_mcp
 
     # Launch Qwen Code
     launch_qwen "$include_vlm" "${remaining_args[@]}"
