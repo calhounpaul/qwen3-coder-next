@@ -1703,8 +1703,8 @@ main() {
     fi
 
     # =========================================================================
-    # CLIENT-ONLY MODE: No Docker, no GPU, no local services
-    # Only installs MCP server + Qwen Code CLI and connects to remote services
+    # CLIENT-ONLY MODE: Connect to remote Code LLM + browser
+    # Optionally run VLM/ML locally with --local-ml
     # =========================================================================
     if $client_only; then
         if [[ -z "$REMOTE_CODE_URL" ]]; then
@@ -1719,7 +1719,43 @@ main() {
         check_url_security "$REMOTE_GUI_ACTOR_URL" "GUI-Actor"
         check_url_security "$REMOTE_CDP_URL" "CDP"
 
-        # Only need pip (for MCP server) and npm (for Qwen Code)
+        # Start local ML services if --local-ml is set
+        if $local_ml; then
+            command -v docker &>/dev/null || error "Docker not found. --local-ml requires Docker."
+
+            # Build and start VLM locally
+            if $include_vlm; then
+                header "Starting Local VLM"
+                cd "$BROWSER_DIR"
+                docker compose --profile vlm build vlm 2>/dev/null || log "VLM image already built"
+
+                if check_container_running "$VLM_CONTAINER" && check_http_health "http://localhost:$VLM_PORT/health"; then
+                    log "VLM already running and healthy"
+                else
+                    log "Starting VLM (Qwen3-VL-4B) on port $VLM_PORT..."
+                    docker compose --profile vlm up -d vlm
+                    log "VLM starting in background (model download/loading may take a few minutes)"
+                fi
+                cd "$PROJECT_DIR"
+
+                # Clear remote VLM URL since we're using local
+                REMOTE_VLM_URL=""
+                export VLM_URL="http://localhost:$VLM_PORT"
+            fi
+
+            # Build ML images (OmniParser, GUI-Actor) for on-demand use
+            if $include_ml; then
+                header "Preparing Local ML Services"
+                ensure_ml_images
+                start_ml_services
+
+                # Clear remote ML URLs since we're using local
+                REMOTE_OMNIPARSER_URL=""
+                REMOTE_GUI_ACTOR_URL=""
+            fi
+        fi
+
+        # Setup MCP server + Qwen CLI
         ensure_mcp_server
         ensure_qwen_cli
         configure_qwen_mcp
