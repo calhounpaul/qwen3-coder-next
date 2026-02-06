@@ -71,7 +71,7 @@ GUI_ACTOR_CONTAINER="automation-gui-actor"
 # Model configuration
 CODE_MODEL_REPO="unsloth/Qwen3-Coder-Next-GGUF"
 CODE_MODEL_DIR="Qwen3-Coder-Next-GGUF"
-# Model file is auto-selected based on VRAM (see select_model_quant)
+# Model file is auto-selected based on GPU name (see select_model_quant)
 
 # Ports
 CODE_PORT=8003
@@ -107,6 +107,10 @@ REMOTE_NOVNC_URL=""
 REMOTE_CDP_URL=""
 REMOTE_OMNIPARSER_URL=""
 REMOTE_GUI_ACTOR_URL=""
+
+# Single gateway tunnel (auto-derives all remote URLs)
+REMOTE_TUNNEL_URL=""
+TUNNEL_KEY=""
 
 # Flag to skip security prompts (--insecure-ok)
 INSECURE_OK=false
@@ -186,33 +190,42 @@ parse_remote_url() {
 }
 
 # =============================================================================
-# VRAM Detection and Model Selection
+# GPU Detection and Model Selection
 # =============================================================================
 
-detect_vram() {
-    # Get total VRAM in GB from first GPU
-    local vram_mb
-    vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-    if [[ -z "$vram_mb" ]]; then
-        echo "0"
+select_model_quant() {
+    # Select quantization based on GPU name from nvidia-smi
+    local gpu_names
+    gpu_names=$(nvidia-smi --query-gpu=gpu_name --format=csv,noheader 2>/dev/null)
+
+    if [[ -z "$gpu_names" ]]; then
+        echo ""
         return
     fi
-    echo $((vram_mb / 1024))
-}
 
-select_model_quant() {
-    local vram_gb="$1"
-    # Select quantization based on available VRAM
-    # Reserve ~10GB for KV cache and other processes
-    # Note: A6000 reports as 47GB due to rounding
-    if [[ $vram_gb -ge 45 ]]; then
-        echo "Qwen3-Coder-Next-Q3_K_S.gguf"  # 34.6GB - fits in 48GB with room for KV cache
-    elif [[ $vram_gb -ge 32 ]]; then
-        echo "Qwen3-Coder-Next-IQ4_XS.gguf"
-    elif [[ $vram_gb -ge 24 ]]; then
+    # RTX A6000 (48GB) - can fit Q3_K_S (34.6GB) with room for KV cache
+    if echo "$gpu_names" | grep -qi "A6000"; then
+        echo "Qwen3-Coder-Next-Q3_K_S.gguf"
+    # Dual RTX 3090 (24GB each) - IQ3_XXS across both GPUs
+    elif [[ $(echo "$gpu_names" | grep -ci "RTX 3090") -ge 2 ]]; then
         echo "Qwen3-Coder-Next-UD-IQ3_XXS.gguf"
+    # Single RTX 3090 or similar 24GB card
+    elif echo "$gpu_names" | grep -qi "RTX 3090"; then
+        echo "Qwen3-Coder-Next-UD-IQ3_XXS.gguf"
+    # Fallback: use VRAM to guess
     else
-        echo "Qwen3-Coder-Next-UD-IQ2_XXS.gguf"
+        local vram_mb
+        vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        local vram_gb=$((vram_mb / 1024))
+        if [[ $vram_gb -ge 45 ]]; then
+            echo "Qwen3-Coder-Next-Q3_K_S.gguf"
+        elif [[ $vram_gb -ge 32 ]]; then
+            echo "Qwen3-Coder-Next-IQ4_XS.gguf"
+        elif [[ $vram_gb -ge 24 ]]; then
+            echo "Qwen3-Coder-Next-UD-IQ3_XXS.gguf"
+        else
+            echo "Qwen3-Coder-Next-UD-IQ2_XXS.gguf"
+        fi
     fi
 }
 
@@ -279,18 +292,15 @@ ensure_models() {
 
     mkdir -p "$MODEL_DIR/$CODE_MODEL_DIR"
 
-    # Detect VRAM and select appropriate quantization
-    local vram_gb
-    vram_gb=$(detect_vram)
-    if [[ "$vram_gb" -eq 0 ]]; then
-        warn "Could not detect VRAM, using default IQ3_XXS quantization"
-        vram_gb=24
-    else
-        log "Detected ${vram_gb}GB VRAM"
+    # Select model based on GPU type
+    CODE_MODEL_FILE=$(select_model_quant)
+    if [[ -z "$CODE_MODEL_FILE" ]]; then
+        warn "Could not detect GPU, using default IQ3_XXS quantization"
+        CODE_MODEL_FILE="Qwen3-Coder-Next-UD-IQ3_XXS.gguf"
     fi
-
-    CODE_MODEL_FILE=$(select_model_quant "$vram_gb")
-    log "Selected model quantization: $CODE_MODEL_FILE"
+    local gpu_names
+    gpu_names=$(nvidia-smi --query-gpu=gpu_name --format=csv,noheader 2>/dev/null | head -1)
+    log "GPU: ${gpu_names:-unknown} -> $CODE_MODEL_FILE"
 
     # Export for other functions
     export CODE_MODEL_FILE
@@ -567,6 +577,8 @@ stop_tunnels() {
         log "Stopping API tunnels..."
         docker rm -f $tunnels 2>/dev/null || true
     fi
+    # Also stop the gateway proxy
+    docker rm -f automation-gateway 2>/dev/null || true
 }
 
 start_tunnel() {
@@ -666,8 +678,85 @@ serve_apis_lan() {
     log "LAN URLs saved to $url_file"
 }
 
+GATEWAY_PORT=8888
+
+serve_single_tunnel() {
+    header "Starting Single Gateway Tunnel"
+
+    # Generate shared secret
+    local secret
+    secret=$(openssl rand -hex 16)
+    local secret_hash
+    secret_hash=$(docker run --rm caddy:2-alpine caddy hash-password --plaintext "$secret")
+
+    # Stop any existing tunnels/gateway
+    stop_tunnels
+
+    # Start Caddy gateway with host networking
+    docker run -d --name automation-gateway \
+        --network host \
+        -e "TUNNEL_SECRET=$secret" \
+        -e "TUNNEL_SECRET_HASH=$secret_hash" \
+        -v "$BROWSER_DIR/Caddyfile.gateway:/etc/caddy/Caddyfile:ro" \
+        caddy:2-alpine
+
+    # Wait for Caddy to be ready
+    local elapsed=0
+    while ! check_http_health "http://localhost:$GATEWAY_PORT"; do
+        sleep 1; elapsed=$((elapsed + 1))
+        [[ $elapsed -ge 10 ]] && { warn "Gateway not ready after 10s"; break; }
+    done
+
+    # Start single cloudflared tunnel
+    docker run -d --name "${TUNNEL_PREFIX}-gateway" \
+        --network host \
+        cloudflare/cloudflared:latest \
+        tunnel --no-autoupdate --url "http://localhost:$GATEWAY_PORT"
+
+    # Extract tunnel URL
+    local url="" elapsed=0
+    while [[ -z "$url" ]] && [[ $elapsed -lt 30 ]]; do
+        sleep 2; elapsed=$((elapsed + 2))
+        url=$(docker logs "${TUNNEL_PREFIX}-gateway" 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1)
+    done
+
+    # Save to .tunnel-urls
+    local tunnel_file="$TOOL_DIR/.tunnel-urls"
+    cat > "$tunnel_file" <<EOF
+tunnel=${url:-pending}
+secret=$secret
+EOF
+
+    # Display
+    echo ""
+    echo "=========================================="
+    echo "  Single Gateway Tunnel"
+    echo "=========================================="
+    echo ""
+    echo "  URL:    ${url:-pending...}"
+    echo "  Secret: $secret"
+    echo ""
+    echo "  Services available at:"
+    echo "    noVNC:      ${url}/ (basic auth user: tunnel)"
+    echo "    Code LLM:   ${url}/code-llm/"
+    echo "    VLM:         ${url}/vlm/"
+    echo "    OmniParser:  ${url}/omniparser/"
+    echo "    GUI-Actor:   ${url}/gui-actor/"
+    echo "    CDP:         ${url}/cdp/"
+    echo ""
+    echo "  Client usage:"
+    echo "    ./local-cc.sh --remote-tunnel ${url} --tunnel-key $secret"
+    echo "=========================================="
+}
+
 serve_apis() {
     local scope="$1"  # "public", "lan", or specific services
+
+    # Handle single gateway mode
+    if [[ "$scope" == "single" ]]; then
+        serve_single_tunnel
+        return 0
+    fi
 
     # Handle LAN mode - just display IPs, no tunnels
     if [[ "$scope" == "lan" ]]; then
@@ -766,18 +855,48 @@ show_tunnels() {
     local tunnel_file="$TOOL_DIR/.tunnel-urls"
     local found_tunnels=false
 
-    # Check running tunnel containers
+    # Check for single gateway mode
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^automation-gateway$"; then
+        # Gateway is running - show tunnel-urls file info
+        if [[ -f "$tunnel_file" ]]; then
+            echo ""
+            echo "  Single Gateway Mode:"
+            local gw_url gw_secret
+            gw_url=$(grep '^tunnel=' "$tunnel_file" 2>/dev/null | cut -d= -f2-)
+            gw_secret=$(grep '^secret=' "$tunnel_file" 2>/dev/null | cut -d= -f2-)
+            if [[ -n "$gw_url" ]]; then
+                echo "    URL:    $gw_url"
+                echo "    Secret: $gw_secret"
+                echo ""
+                echo "    Services:"
+                echo "      noVNC:      ${gw_url}/ (basic auth user: tunnel)"
+                echo "      Code LLM:   ${gw_url}/code-llm/"
+                echo "      VLM:        ${gw_url}/vlm/"
+                echo "      OmniParser: ${gw_url}/omniparser/"
+                echo "      GUI-Actor:  ${gw_url}/gui-actor/"
+                echo "      CDP:        ${gw_url}/cdp/"
+                echo ""
+                echo "    Client usage:"
+                echo "      ./local-cc.sh --remote-tunnel ${gw_url} --tunnel-key $gw_secret"
+                found_tunnels=true
+            fi
+        fi
+        echo ""
+    fi
+
+    # Check for individual tunnel containers
     local tunnels
-    tunnels=$(docker ps --filter "name=${TUNNEL_PREFIX}-" --format '{{.Names}}' 2>/dev/null)
+    tunnels=$(docker ps --filter "name=${TUNNEL_PREFIX}-" --format '{{.Names}}' 2>/dev/null | grep -v "gateway$")
 
     if [[ -n "$tunnels" ]]; then
         echo ""
+        echo "  Individual Tunnels:"
         for container in $tunnels; do
             local service="${container#${TUNNEL_PREFIX}-}"
             local url
             url=$(docker logs "$container" 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1)
             if [[ -n "$url" ]]; then
-                printf "  %-12s -> %s\n" "$service" "$url"
+                printf "    %-12s -> %s\n" "$service" "$url"
                 found_tunnels=true
             fi
         done
@@ -785,7 +904,9 @@ show_tunnels() {
     fi
 
     if ! $found_tunnels; then
-        echo "  No active tunnels. Start with: ./local-cc.sh --tmp-serve-api public"
+        echo "  No active tunnels. Start with:"
+        echo "    ./local-cc.sh --tmp-serve-api single   (recommended)"
+        echo "    ./local-cc.sh --tmp-serve-api public   (individual tunnels)"
     fi
 }
 
@@ -983,7 +1104,13 @@ launch_qwen() {
     else
         export OPENAI_BASE_URL="http://localhost:$CODE_PORT/v1"
     fi
-    export OPENAI_API_KEY='sk-no-key-required'
+    # When using tunnel key, set it as OPENAI_API_KEY so the SDK sends
+    # Authorization: Bearer <key> which Caddy accepts as tunnel auth
+    if [[ -n "$TUNNEL_KEY" ]]; then
+        export OPENAI_API_KEY="$TUNNEL_KEY"
+    else
+        export OPENAI_API_KEY='sk-no-key-required'
+    fi
     export OPENAI_MODEL="unsloth/Qwen3-Coder-Next"
 
     # Export remote ML service URLs for MCP server (novnc-mcp inherits env)
@@ -1103,6 +1230,12 @@ main() {
                 remote_cdp)
                     REMOTE_CDP_URL=$(parse_remote_url "$arg" "$CDP_PORT")
                     ;;
+                remote_tunnel)
+                    REMOTE_TUNNEL_URL="$arg"
+                    ;;
+                tunnel_key)
+                    TUNNEL_KEY="$arg"
+                    ;;
             esac
             pending_arg=""
             continue
@@ -1151,6 +1284,12 @@ main() {
             --remote-cdp)
                 pending_arg="remote_cdp"
                 ;;
+            --remote-tunnel)
+                pending_arg="remote_tunnel"
+                ;;
+            --tunnel-key)
+                pending_arg="tunnel_key"
+                ;;
             --insecure-ok)
                 INSECURE_OK=true
                 ;;
@@ -1170,7 +1309,9 @@ main() {
                 echo "  --status                 Show status of all services"
                 echo "  --install                Install as 'local-cc' command"
                 echo ""
-                echo "Remote Servers (use instead of local):"
+                echo "Remote Servers:"
+                echo "  --remote-tunnel URL      Use single gateway tunnel (from --tmp-serve-api single)"
+                echo "  --tunnel-key SECRET      Shared secret for gateway authentication"
                 echo "  --remote-code URL        Use remote Code LLM (e.g., https://xxx.trycloudflare.com)"
                 echo "  --remote-vlm URL         Use remote VLM server"
                 echo "  --remote-novnc URL       Use remote noVNC browser"
@@ -1180,15 +1321,18 @@ main() {
                 echo "  --insecure-ok            Skip HTTP security warnings"
                 echo ""
                 echo "Sharing (expose local APIs):"
-                echo "  --tmp-serve-api public   Create Cloudflare tunnels for all running APIs"
+                echo "  --tmp-serve-api single   Single gateway tunnel for all services (recommended)"
+                echo "  --tmp-serve-api public   Individual Cloudflare tunnels per service"
                 echo "  --tmp-serve-api lan      Show LAN IP addresses for all running APIs"
-                echo "  --stop-tunnels           Stop all API tunnels"
+                echo "  --stop-tunnels           Stop all tunnels and gateway"
                 echo "  --show-tunnels           Show active tunnel URLs"
                 echo ""
                 echo "Examples:"
                 echo "  $0                                    # Start local services"
                 echo "  $0 --vlm --ml                         # Start with all ML services"
-                echo "  $0 --tmp-serve-api public             # Share via Cloudflare tunnels"
+                echo "  $0 --tmp-serve-api single             # Share via single gateway tunnel"
+                echo "  $0 --tmp-serve-api public             # Share via individual tunnels"
+                echo "  $0 --remote-tunnel URL --tunnel-key SECRET  # Connect to gateway"
                 echo "  $0 --remote-code https://xxx.trycloudflare.com  # Use remote LLM"
                 echo "  $0 --remote-code 192.168.1.10:8003    # Use LAN server"
                 echo "  $0 -- --resume                        # Pass --resume to Qwen Code"
@@ -1204,6 +1348,22 @@ main() {
                 ;;
         esac
     done
+
+    # Auto-derive all remote URLs from single gateway tunnel
+    if [[ -n "$REMOTE_TUNNEL_URL" ]]; then
+        local base="${REMOTE_TUNNEL_URL%/}"
+        REMOTE_CODE_URL="$base/code-llm"
+        REMOTE_VLM_URL="$base/vlm"
+        REMOTE_NOVNC_URL="$base"
+        REMOTE_OMNIPARSER_URL="$base/omniparser"
+        REMOTE_GUI_ACTOR_URL="$base/gui-actor"
+        REMOTE_CDP_URL="$base/cdp"
+    fi
+
+    # Export TUNNEL_KEY for MCP server and set OPENAI_API_KEY for LLM auth
+    if [[ -n "$TUNNEL_KEY" ]]; then
+        export TUNNEL_KEY="$TUNNEL_KEY"
+    fi
 
     # Validate remote URLs for security
     check_url_security "$REMOTE_CODE_URL" "Code LLM"
