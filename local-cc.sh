@@ -1077,6 +1077,145 @@ EOF
 }
 
 # =============================================================================
+# Rebuild Components
+# =============================================================================
+
+rebuild_component() {
+    local component="$1"
+
+    case "$component" in
+        vlm)
+            header "Rebuilding VLM Container"
+            cd "$BROWSER_DIR"
+            log "Pulling latest submodule changes..."
+            git pull origin main 2>/dev/null || true
+            log "Stopping VLM container..."
+            docker stop "$VLM_CONTAINER" 2>/dev/null || true
+            docker rm "$VLM_CONTAINER" 2>/dev/null || true
+            log "Building VLM image (--no-cache)..."
+            docker compose --profile vlm build vlm --no-cache
+            log "Starting VLM container..."
+            docker compose --profile vlm up -d vlm
+            log "VLM rebuild complete. Check logs: docker logs $VLM_CONTAINER"
+            cd "$PROJECT_DIR"
+            ;;
+        omniparser)
+            header "Rebuilding OmniParser Container"
+            cd "$BROWSER_DIR"
+            docker stop "$OMNIPARSER_CONTAINER" 2>/dev/null || true
+            docker rm "$OMNIPARSER_CONTAINER" 2>/dev/null || true
+            docker compose --profile ml build omniparser --no-cache
+            log "OmniParser rebuild complete. Start with: docker compose --profile ml up -d omniparser"
+            cd "$PROJECT_DIR"
+            ;;
+        gui-actor)
+            header "Rebuilding GUI-Actor Container"
+            cd "$BROWSER_DIR"
+            docker stop "$GUI_ACTOR_CONTAINER" 2>/dev/null || true
+            docker rm "$GUI_ACTOR_CONTAINER" 2>/dev/null || true
+            docker compose --profile ml build gui-actor --no-cache
+            log "GUI-Actor rebuild complete. Start with: docker compose --profile ml up -d gui-actor"
+            cd "$PROJECT_DIR"
+            ;;
+        browser)
+            header "Rebuilding Browser Container"
+            cd "$BROWSER_DIR"
+            docker stop "$BROWSER_CONTAINER" 2>/dev/null || true
+            docker rm "$BROWSER_CONTAINER" 2>/dev/null || true
+            docker compose build browser --no-cache
+            docker compose up -d browser
+            log "Browser rebuild complete."
+            cd "$PROJECT_DIR"
+            ;;
+        code-llm|llm)
+            header "Rebuilding Code LLM Container"
+            docker stop "$CODE_CONTAINER" 2>/dev/null || true
+            docker rm "$CODE_CONTAINER" 2>/dev/null || true
+            docker rmi "$LLAMA_IMAGE" 2>/dev/null || true
+            log "Removed old image. Run 'local-cc' to rebuild and start."
+            ;;
+        all)
+            rebuild_component vlm
+            rebuild_component browser
+            rebuild_component code-llm
+            ;;
+        *)
+            error "Unknown component: $component"
+            echo ""
+            echo "Available components:"
+            echo "  vlm         - Vision Language Model (Qwen3-VL-4B)"
+            echo "  omniparser  - UI element detection"
+            echo "  gui-actor   - Natural language click prediction"
+            echo "  browser     - Browser automation container"
+            echo "  code-llm    - Code LLM (llama-server)"
+            echo "  all         - Rebuild all components"
+            exit 1
+            ;;
+    esac
+}
+
+restart_component() {
+    local component="$1"
+
+    case "$component" in
+        vlm)
+            header "Restarting VLM Container"
+            docker restart "$VLM_CONTAINER" 2>/dev/null || {
+                warn "VLM not running, starting it..."
+                cd "$BROWSER_DIR"
+                docker compose --profile vlm up -d vlm
+                cd "$PROJECT_DIR"
+            }
+            log "VLM restarted. Check logs: docker logs $VLM_CONTAINER"
+            ;;
+        omniparser)
+            header "Restarting OmniParser Container"
+            docker restart "$OMNIPARSER_CONTAINER" 2>/dev/null || warn "OmniParser not running"
+            ;;
+        gui-actor)
+            header "Restarting GUI-Actor Container"
+            docker restart "$GUI_ACTOR_CONTAINER" 2>/dev/null || warn "GUI-Actor not running"
+            ;;
+        browser)
+            header "Restarting Browser Container"
+            docker restart "$BROWSER_CONTAINER" 2>/dev/null || {
+                warn "Browser not running, starting it..."
+                cd "$BROWSER_DIR"
+                docker compose up -d browser
+                cd "$PROJECT_DIR"
+            }
+            log "Browser restarted."
+            ;;
+        code-llm|llm)
+            header "Restarting Code LLM Container"
+            docker restart "$CODE_CONTAINER" 2>/dev/null || warn "Code LLM not running"
+            log "Code LLM restarted. Waiting for health..."
+            wait_for_health "http://localhost:$CODE_PORT/health" "Code LLM" 120 || warn "Code LLM may still be loading"
+            ;;
+        all)
+            log "Restarting all services (keeping tunnels)..."
+            restart_component code-llm
+            restart_component browser
+            if check_container_running "$VLM_CONTAINER"; then
+                restart_component vlm
+            fi
+            ;;
+        *)
+            error "Unknown component: $component"
+            echo ""
+            echo "Available components:"
+            echo "  vlm         - Vision Language Model"
+            echo "  browser     - Browser automation container"
+            echo "  code-llm    - Code LLM (llama-server)"
+            echo "  omniparser  - UI element detection"
+            echo "  gui-actor   - Natural language click prediction"
+            echo "  all         - Restart all running services"
+            exit 1
+            ;;
+    esac
+}
+
+# =============================================================================
 # Qwen Code CLI Installation
 # =============================================================================
 
@@ -1285,6 +1424,14 @@ main() {
                 serve_api)
                     serve_api="$arg"
                     ;;
+                rebuild)
+                    rebuild_component "$arg"
+                    exit 0
+                    ;;
+                restart)
+                    restart_component "$arg"
+                    exit 0
+                    ;;
                 remote_code)
                     REMOTE_CODE_URL=$(parse_remote_url "$arg" "$CODE_PORT")
                     ;;
@@ -1326,6 +1473,12 @@ main() {
             --install)
                 install_command
                 exit 0
+                ;;
+            --rebuild)
+                pending_arg="rebuild"
+                ;;
+            --restart)
+                pending_arg="restart"
                 ;;
             --tmp-serve-api)
                 pending_arg="serve_api"
@@ -1397,6 +1550,8 @@ main() {
                 echo "  --local-ml               Run VLM/ML locally even in client mode (uses GPU 0)"
                 echo "  --stop                   Stop all services"
                 echo "  --status                 Show status of all services"
+                echo "  --rebuild COMPONENT      Rebuild a component (vlm, browser, code-llm, omniparser, gui-actor, all)"
+                echo "  --restart COMPONENT      Restart a component without rebuilding (keeps tunnels alive)"
                 echo "  --install                Install as 'local-cc' command"
                 echo ""
                 echo "Remote Servers (client mode):"
