@@ -13,7 +13,7 @@ See [README.md](./README.md) for end-user documentation.
 - **NEVER use `huggingface-cli`** - Always use `hf` command instead for all HuggingFace operations (download, upload, etc.)
 - **Image Analysis**: Do not use the Read tool for images (`.png`, `.jpg`, etc.). Use `vlm_chat` for image understanding instead.
 - **ML Service Management**: ML services (OmniParser, GUI-Actor, VLM) use **MLServiceManager** for on-demand startup with mutual exclusion - only one ML service runs at a time (see `mcp-browser-co-gnome/src/novnc_automation/ml_services.py`)
-- **GPU Memory**: Model quantization is auto-selected by GPU name (A6000 -> Q3_K_S, 2x RTX 3090 -> IQ3_XXS, fallback by VRAM).
+- **GPU Memory**: Model quantization is auto-selected by GPU name (A6000 -> Q4_K_M, 2x RTX 3090 -> IQ3_XXS, fallback by VRAM).
 
 ## Avoiding Tool Call Loops
 
@@ -39,7 +39,7 @@ GOOD: Grep for function name -> get line 847 -> Read lines 840-880
 
 | Service | Port | Description |
 |---------|------|-------------|
-| Code LLM | 8003 | Qwen3-Coder-Next (120k ctx, auto-quant by GPU) |
+| Code LLM | 8003 | Qwen3-Coder-Next (65k ctx, auto-quant by GPU) |
 | noVNC | 6080 | Browser visualization (password: `secret`) |
 | CDP | 9222 | Chrome DevTools Protocol |
 | VLM | 8004 | Qwen3-VL-4B (vision-language model) |
@@ -118,11 +118,10 @@ For remote services, MLServiceManager:
 ./local-cc.sh --stop-tunnels          # Stop only tunnels (keeps services running)
 ./local-cc.sh --status                # Check service status
 ./local-cc.sh --install               # Install as 'local-cc' command (run from anywhere)
+./local-cc.sh --rebuild vlm           # Rebuild a component with --no-cache
+./local-cc.sh --restart vlm           # Restart a component (keeps tunnels alive)
 
-# Restart services while keeping tunnel alive (no new credentials needed)
-docker restart qwen3-server           # Restart Code LLM only
-docker restart automation-vlm         # Restart VLM only
-docker restart automation-browser     # Restart browser only
+# Available components for --rebuild/--restart: vlm, browser, code-llm, omniparser, gui-actor, all
 
 # Server mode: Code LLM + browser only (ML services run on client)
 ./local-cc.sh --tmp-serve-api single --server-only
@@ -206,7 +205,7 @@ docker compose --profile ml up -d       # + ML services
 
 | Service | Port | Description | Flag |
 |---------|------|-------------|------|
-| Code LLM | 8003 | Qwen3-Coder-Next 80B MoE (120k ctx, GGUF auto-quant) | default |
+| Code LLM | 8003 | Qwen3-Coder-Next 80B MoE (65k ctx, GGUF auto-quant) | default |
 | noVNC | 6080 | Browser visualization (password: `secret`) | default |
 | CDP | 9222 | Chrome DevTools Protocol | default |
 | VLM | 8004 | Qwen3-VL-4B (vision-language model) | `--vlm` |
@@ -219,7 +218,7 @@ docker compose --profile ml up -d       # + ML services
 - Repo: `unsloth/Qwen3-Coder-Next-GGUF`
 - Format: GGUF via llama.cpp with CUDA
 - Auto-selected quantization by GPU:
-  - A6000 (48GB): Q3_K_S (33GB) - leaves ~10GB for KV cache + VLM
+  - A6000 (48GB): Q4_K_M (48.5GB) - uses ~42GB with 65k context KV cache
   - 2x RTX 3090: IQ3_XXS
   - Fallback by VRAM: ≥45GB → Q3_K_S | ≥32GB → IQ4_XS | ≥24GB → IQ3_XXS | <24GB → IQ2_XXS
 - Note: FP8 (~76GB) requires H100; GGUF quantization enables A6000/consumer GPUs
@@ -237,10 +236,10 @@ GPU allocation depends on hardware:
 **A6000 (48GB single GPU):**
 | Service | VRAM Usage | Notes |
 |---------|------------|-------|
-| Code LLM | ~36-42GB | Q3_K_S (33GB) + KV cache for 120k context |
-| VLM | ~5GB | Runs when Code LLM not using full context |
-| OmniParser | ~4GB | On-demand, mutual exclusion with other ML services |
-| GUI-Actor | ~4GB | On-demand, mutual exclusion with other ML services |
+| Code LLM | ~42-46GB | Q4_K_M (48.5GB model) + KV cache for 65k context |
+| VLM | N/A | Must run on client via `--local-ml` (server VRAM fully used) |
+| OmniParser | N/A | Must run on client via `--local-ml` |
+| GUI-Actor | N/A | Must run on client via `--local-ml` |
 
 **2x RTX 3090 (24GB each):**
 | Service | VRAM Usage | Notes |
@@ -355,6 +354,11 @@ decode: failed to find a memory slot for batch of size 2048
 
 **Fix:** Rebuild the VLM container to pick up the latest entrypoint settings:
 ```bash
+./local-cc.sh --rebuild vlm
+```
+
+Or manually:
+```bash
 cd mcp-browser-co-gnome
 git pull origin main
 docker compose --profile vlm build vlm --no-cache
@@ -365,6 +369,13 @@ docker compose --profile vlm up -d vlm
 Verify fix by checking logs - should show `n_parallel = 1`:
 ```bash
 docker logs automation-vlm 2>&1 | grep n_parallel
+```
+
+### VLM "--flash-attn" or "--n-parallel" errors
+
+Different versions of llama-server have different argument syntax. The entrypoint now auto-detects the correct arguments by checking `--help` output. If you see these errors, rebuild the VLM:
+```bash
+./local-cc.sh --rebuild vlm
 ```
 
 ### VLM outputs garbage (question marks)
